@@ -1,1 +1,3 @@
 node_modules
+activity_data.sqlite
+.env

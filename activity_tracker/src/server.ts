@@ -4,6 +4,8 @@ import initSqlJs from 'sql.js';
 import fs from 'fs';
 import path from 'path';
 import http from 'http';
+import * as dotenv from 'dotenv';
+dotenv.config();
 
 type DayStats = {
   date: string;
@@ -60,12 +62,7 @@ function basicAuth(req: Request, res: Response, next: NextFunction) {
   return res.status(401).send('Auth required');
 }
 
-function apiKeyAuth(req: Request, res: Response, next: NextFunction) {
-  if (!INGEST_API_KEY) return res.status(500).send('Server missing INGEST_API_KEY');
-  const hdr = req.headers['x-api-key'] || req.query.key;
-  if (hdr === INGEST_API_KEY || `${hdr}` === INGEST_API_KEY) return next();
-  return res.status(401).send('Invalid or missing API key');
-}
+
 
 async function loadDb() {
   let buf = new Uint8Array();
@@ -183,7 +180,7 @@ function kJtoKcal(qty: number, units?: string) {
 
   // ------------- PUBLIC API for Health Auto Export (API key based) -------------
   // Accepts JSON exactly as HAE documents it: { "data": { "metrics": [...], "workouts": [...] } }
-  app.post('/hae', apiKeyAuth, (req: Request, res: Response) => {
+  app.post('/hae', basicAuth, (req: Request, res: Response) => {
     const payload = req.body?.data || {};
     const metrics: any[] = payload.metrics || [];
     const workouts: any[] = payload.workouts || [];
@@ -206,7 +203,7 @@ function kJtoKcal(qty: number, units?: string) {
   // If you prefer, remove basicAuth on these to allow unauthenticated posts from the phone.
   // Here we allow API key OR Basic Auth for flexibility.
   function eitherAuth(req: Request, res: Response, next: NextFunction) {
-    if (req.headers['x-api-key'] || req.query.key) return apiKeyAuth(req, res, next);
+    if (req.headers['x-api-key'] || req.query.key) return basicAuth(req, res, next);
     return basicAuth(req, res, next);
     }
 
