@@ -4,39 +4,108 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>tesseract.sbs</title>
-  <style>
-    :root { --bg:#0f1115; --card:#151924; --text:#eaeef7; --muted:#a6b1c2; --accent:#5aa6ff; --border:#2a3142; }
-    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--text)}
-    .wrap{max-width:960px;margin:0 auto;padding:32px}
-    header{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px}
-    nav a{color:var(--muted);margin-right:16px;text-decoration:none;border-bottom:1px dotted transparent}
-    nav a:hover{color:var(--text);border-color:var(--accent)}
-    .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:24px}
-    h1{margin:0 0 8px} p{margin:0 0 16px;color:var(--muted)}
-    ul{line-height:1.9}
-  </style>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
-  <div class="wrap">
-    <header>
-      <strong>tesseract.sbs</strong>
-      <nav>
-        <a href="/index.html">Home</a>
-        <a href="/activity.html">Activity tracker</a>
-        <a href="/portfolio.html">Portfolio</a>
-        <a href="/electronics.html">Electronic projects</a>
+  <header class="site-header">
+    <div class="container header-inner">
+      <a class="brand" href="/">
+        <span class="logo" aria-hidden="true">⌁</span>
+        <span>tesseract.sbs</span>
+      </a>
+      <nav class="nav">
+        <a href="/">Home</a>
+        <a href="https://activity.tesseract.sbs" target="_blank" rel="noopener">Activity tracker</a>
+        <a href="./portfolio.html">Portfolio</a>
+        <a href="./electronics.html">Electronic projects</a>
       </nav>
-    </header>
-
-    <div class="card">
-      <h1>Welcome</h1>
-      <p>Select a section:</p>
-      <ul>
-        <li><a href="/activity.html">Activity tracker</a> (opens dashboard)</li>
-        <li><a href="/portfolio.html">Portfolio</a></li>
-        <li><a href="/electronics.html">Electronic projects</a></li>
-      </ul>
     </div>
-  </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="container hero-inner">
+        <div class="hero-copy">
+          <h1>Builds, data & side-projects</h1>
+          <p>Personal hub for experiments, activity insights, and electronics. Minimal, fast, and privacy-friendly.</p>
+          <div class="cta-row">
+            <a class="btn btn-primary" href="https://activity.tesseract.sbs" target="_blank" rel="noopener">Open Activity Dashboard</a>
+            <a class="btn btn-ghost" href="./portfolio.html">See Portfolio</a>
+          </div>
+        </div>
+        <div class="hero-card">
+          <div class="stat">
+            <div class="stat-label">Today</div>
+            <div class="stat-value" id="stat-steps">—</div>
+            <div class="stat-sub">steps</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Active</div>
+            <div class="stat-value" id="stat-kcal">—</div>
+            <div class="stat-sub">kcal</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Workouts</div>
+            <div class="stat-value" id="stat-wk">—</div>
+            <div class="stat-sub">today</div>
+          </div>
+          <a class="mini-link" href="https://activity.tesseract.sbs" target="_blank" rel="noopener">Live stats →</a>
+        </div>
+      </div>
+      <div class="bg-grid" aria-hidden="true"></div>
+    </section>
+
+    <section class="cards container">
+      <a class="card" href="https://activity.tesseract.sbs" target="_blank" rel="noopener">
+        <div class="card-icon">🏃‍♂️</div>
+        <h3>Activity tracker</h3>
+        <p>Daily steps, active kcal, workouts — private dashboard behind auth.</p>
+        <span class="card-link">Open dashboard ↗</span>
+      </a>
+
+      <a class="card" href="./portfolio.html">
+        <div class="card-icon">🧰</div>
+        <h3>Portfolio</h3>
+        <p>Projects, write-ups, and small tools I tinker with.</p>
+        <span class="card-link">View portfolio →</span>
+      </a>
+
+      <a class="card" href="./electronics.html">
+        <div class="card-icon">🔧</div>
+        <h3>Electronic projects</h3>
+        <p>PCBs, microcontrollers, sensors, and logs from the bench.</p>
+        <span class="card-link">Explore builds →</span>
+      </a>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <span>© <span id="y"></span> tesseract.sbs</span>
+      <span class="small">Built with Cloudflare Pages & Tunnel</span>
+    </div>
+  </footer>
+
+  <script>
+    // Set year
+    document.getElementById('y').textContent = new Date().getFullYear();
+
+    // Try to show a tiny snapshot from the tracker (non-blocking; ignore errors)
+    (async () => {
+      try {
+        const u = 'https://activity.tesseract.sbs/api/daily';
+        const res = await fetch(u, { credentials: 'omit' }); // will 401 if protected
+        if (!res.ok) return;
+        const data = await res.json();
+        const today = data[data.length - 1] || {};
+        if (today.steps != null) document.getElementById('stat-steps').textContent = Number(today.steps).toLocaleString();
+        if (today.activeKcal != null) document.getElementById('stat-kcal').textContent = Math.round(today.activeKcal);
+        if (today.workoutCount != null) document.getElementById('stat-wk').textContent = today.workoutCount;
+      } catch (_) {}
+    })();
+  </script>
 </body>
 </html>
