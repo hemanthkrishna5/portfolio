@@ -23,7 +23,6 @@ const DB_FILE = path.resolve(ROOT, 'activity_data.sqlite');
 const PORT = Number(process.env.PORT || 4000);
 const BASIC_USER = process.env.BASIC_USER || 'user';
 let BASIC_PASSWORD = process.env.BASIC_PASSWORD || '';
-const INGEST_API_KEY = process.env.INGEST_API_KEY || ''; // for HAE posts
 
 async function fetchPublicIP(): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -62,19 +61,30 @@ function basicAuth(req: Request, res: Response, next: NextFunction) {
   return res.status(401).send('Auth required');
 }
 
-
-
 async function loadDb() {
   let buf = new Uint8Array();
   if (fs.existsSync(DB_FILE)) buf = fs.readFileSync(DB_FILE);
   const SQL = await initSqlJs({
-    locateFile: (f: string) => `node_modules/sql.js/dist/${f}`
+    locateFile: (f: string) => `node_modules/sql.js/dist/${f}`,
   });
   return new SQL.Database(buf);
 }
 
 function kJtoKcal(qty: number, units?: string) {
   return units === 'kJ' ? qty / 4.184 : qty;
+}
+
+function isSteps(name?: string) {
+  const n = (name || '').trim();
+  return ['step_count', 'stepCount', 'HKQuantityTypeIdentifierStepCount'].includes(n);
+}
+function isActiveEnergy(name?: string) {
+  const n = (name || '').trim();
+  return [
+    'active_energy',
+    'activeEnergyBurned',
+    'HKQuantityTypeIdentifierActiveEnergyBurned',
+  ].includes(n);
 }
 
 (async function main() {
@@ -134,8 +144,13 @@ function kJtoKcal(qty: number, units?: string) {
 
   function upsertSteps(d: string, steps: number) {
     const prev = dayMap.get(d) || {
-      date: d, steps: 0, activeKcal: 0, totalKcal: 0,
-      workoutCount: 0, workoutMinutes: 0, workoutNames: [],
+      date: d,
+      steps: 0,
+      activeKcal: 0,
+      totalKcal: 0,
+      workoutCount: 0,
+      workoutMinutes: 0,
+      workoutNames: [],
     };
     prev.steps = steps;
     prev.totalKcal = prev.activeKcal + 1745;
@@ -145,8 +160,13 @@ function kJtoKcal(qty: number, units?: string) {
 
   function upsertActiveKcal(d: string, qty: number, units?: string) {
     const prev = dayMap.get(d) || {
-      date: d, steps: 0, activeKcal: 0, totalKcal: 0,
-      workoutCount: 0, workoutMinutes: 0, workoutNames: [],
+      date: d,
+      steps: 0,
+      activeKcal: 0,
+      totalKcal: 0,
+      workoutCount: 0,
+      workoutMinutes: 0,
+      workoutNames: [],
     };
     prev.activeKcal += kJtoKcal(qty, units);
     prev.totalKcal = prev.activeKcal + 1745;
@@ -160,8 +180,13 @@ function kJtoKcal(qty: number, units?: string) {
     const kcal = w.activeEnergyBurned ? kJtoKcal(w.activeEnergyBurned.qty, w.activeEnergyBurned.units) : 0;
 
     const prev = dayMap.get(d) || {
-      date: d, steps: 0, activeKcal: 0, totalKcal: 0,
-      workoutCount: 0, workoutMinutes: 0, workoutNames: [],
+      date: d,
+      steps: 0,
+      activeKcal: 0,
+      totalKcal: 0,
+      workoutCount: 0,
+      workoutMinutes: 0,
+      workoutNames: [],
     };
     prev.workoutCount += 1;
     prev.workoutMinutes += mins;
@@ -174,23 +199,38 @@ function kJtoKcal(qty: number, units?: string) {
 
   const app = express();
 
-  // small log
-  app.use((req, _res, next) => { console.log(`→ ${req.method} ${req.url}`); next(); });
-  app.use(express.json({ limit: '100mb' }));
+  // tiny log
+  app.use((req, _res, next) => {
+    console.log(`→ ${req.method} ${req.url}`);
+    next();
+  });
 
-  // ------------- PUBLIC API for Health Auto Export (API key based) -------------
-  // Accepts JSON exactly as HAE documents it: { "data": { "metrics": [...], "workouts": [...] } }
+  // big payloads + urlencoded
+  app.use(express.json({ limit: '500mb', inflate: true, type: 'application/json' }));
+  app.use(express.urlencoded({ limit: '500mb', extended: true }));
+
+  // 413 handler (for body too large)
+  app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
+    if (err?.type === 'entity.too.large' || err?.status === 413) {
+      return res.status(413).send('Payload too large');
+    }
+    next(err);
+  });
+
+  // -------- Health Auto Export endpoint (Basic Auth) --------
+  // Accepts: { "data": { "metrics": [...], "workouts": [...] } }
   app.post('/hae', basicAuth, (req: Request, res: Response) => {
     const payload = req.body?.data || {};
     const metrics: any[] = payload.metrics || [];
     const workouts: any[] = payload.workouts || [];
 
     metrics.forEach((m: any) => {
-      const { name, units, data = [] } = m || {};
-      if (name === 'step_count') {
+      const { name, identifier, units, data = [] } = m || {};
+      const key = identifier || name;
+      if (isSteps(key)) {
         data.forEach((r: any) => upsertSteps((r.date || '').split(' ')[0], Math.round(r.qty || 0)));
       }
-      if (name === 'active_energy') {
+      if (isActiveEnergy(key)) {
         data.forEach((r: any) => upsertActiveKcal((r.date || '').split(' ')[0], r.qty || 0, units));
       }
     });
@@ -199,36 +239,32 @@ function kJtoKcal(qty: number, units?: string) {
     res.sendStatus(200);
   });
 
-  // ------------- Back-compat endpoints (still protected if you want) -------------
-  // If you prefer, remove basicAuth on these to allow unauthenticated posts from the phone.
-  // Here we allow API key OR Basic Auth for flexibility.
-  function eitherAuth(req: Request, res: Response, next: NextFunction) {
-    if (req.headers['x-api-key'] || req.query.key) return basicAuth(req, res, next);
-    return basicAuth(req, res, next);
-    }
-
-  app.post('/steps', eitherAuth, (req, res) => {
+  // Back-compat endpoints (keep Basic Auth)
+  app.post('/steps', basicAuth, (req, res) => {
     (req.body?.data?.metrics || []).forEach((m: any) => {
-      if (m.name === 'step_count') {
+      const key = m.identifier || m.name;
+      if (isSteps(key)) {
         (m.data || []).forEach((r: any) =>
-          upsertSteps((r.date || '').split(' ')[0], Math.round(r.qty || 0)));
+          upsertSteps((r.date || '').split(' ')[0], Math.round(r.qty || 0))
+        );
       }
-      if (m.name === 'active_energy') {
+      if (isActiveEnergy(key)) {
         (m.data || []).forEach((r: any) =>
-          upsertActiveKcal((r.date || '').split(' ')[0], r.qty || 0, m.units));
+          upsertActiveKcal((r.date || '').split(' ')[0], r.qty || 0, m.units)
+        );
       }
     });
     res.sendStatus(200);
   });
 
-  app.post('/workouts', eitherAuth, (req, res) => {
+  app.post('/workouts', basicAuth, (req, res) => {
     const list = req.body?.data?.workouts;
     if (!Array.isArray(list)) return res.status(400).send('Invalid workout payload');
     list.forEach(upsertWorkout);
     res.sendStatus(200);
   });
 
-  // ------------------- Dashboard + API (Basic Auth) -------------------
+  // API + dashboard (protected)
   app.use('/api', basicAuth);
   app.get('/api/daily', (_req, res) => {
     const data = [...dayMap.values()].sort(
@@ -237,16 +273,18 @@ function kJtoKcal(qty: number, units?: string) {
     res.json(data);
   });
 
-  // static site & dashboard (protected)
   app.use('/', basicAuth, express.static(PUBLIC_DIR));
   app.get('/', basicAuth, (_req, res) => {
     res.sendFile(path.join(PUBLIC_DIR, 'dashboard.html'));
   });
 
-  app.listen(PORT, () => {
+  const server = app.listen(PORT, () => {
     console.log(`Listening on http://localhost:${PORT}`);
     console.log(`🔑 Basic auth user: ${BASIC_USER}`);
     console.log(`🔑 Basic auth password: ${BASIC_PASSWORD || '(empty!)'}`);
-    if (INGEST_API_KEY) console.log(`🔑 Ingest API key set (X-API-Key)`);
   });
+
+  // longer timeouts for large uploads
+  (server as any).headersTimeout = 300000;  // 5 min
+  (server as any).requestTimeout = 300000;  // 5 min
 })();
