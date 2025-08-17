@@ -197,15 +197,10 @@ function weekBounds(today = new Date()) {
     const d = (w.start || '').split(' ')[0] || 'unknown';
     const mins = (w.duration || 0) / 60;
     const kcal = w.activeEnergyBurned ? kJtoKcal(w.activeEnergyBurned.qty, w.activeEnergyBurned.units) : 0;
-
+  
     const prev = dayMap.get(d) || {
-      date: d,
-      steps: 0,
-      activeKcal: 0,
-      totalKcal: 0,
-      workoutCount: 0,
-      workoutMinutes: 0,
-      workoutNames: [],
+      date: d, steps: 0, activeKcal: 0, totalKcal: 0,
+      workoutCount: 0, workoutMinutes: 0, workoutNames: [],
     };
     prev.workoutCount += 1;
     prev.workoutMinutes += mins;
