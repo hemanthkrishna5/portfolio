@@ -5,63 +5,60 @@
   <title>Activity Dashboard</title>
 
   <style>
-    :root {
-      --bg: #0f1115;
-      --card: #151924;
-      --text: #eaeef7;
-      --muted: #a6b1c2;
-      --accent: #5aa6ff;
-      --accent2: #ff7b72;
-      --accent3: #4ac7a5;
-      --border: #2a3142;
+    :root{
+      --bg:#0f1115;--card:#151924;--text:#eaeef7;--muted:#a6b1c2;
+      --accent:#5aa6ff;--accent2:#ff7b72;--accent3:#4ac7a5;--border:#2a3142;
     }
-    html, body { background: var(--bg); color: var(--text); }
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 2rem; }
-    h1 { margin: 0 0 1rem; }
-    .subtle { color: var(--muted); margin: 0 0 2rem; }
+    html,body{background:var(--bg);color:var(--text)}
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:2rem}
+    h1{margin:0 0 1rem}.subtle{color:var(--muted);margin:0 0 2rem}
 
-    .card {
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 16px;
-      margin-bottom: 20px;
-      box-shadow: 0 6px 24px rgba(0,0,0,.25);
+    .card{
+      background:var(--card);border:1px solid var(--border);border-radius:12px;
+      padding:16px;margin-bottom:20px;box-shadow:0 6px 24px rgba(0,0,0,.25)
     }
+    canvas{max-width:100%;height:360px}
 
-    canvas { max-width: 100%; height: 360px; }
+    /* DataTable dark styling + centered text */
+    table.dataTable.table-dark{width:100%!important;border-collapse:separate;border-spacing:0}
+    table.dataTable.table-dark thead th{
+      background:#1b2130;color:var(--text);border-bottom:1px solid var(--border);
+      text-align:center;position:relative
+    }
+    table.dataTable.table-dark tbody td{
+      color:var(--text);border-top:1px solid var(--border);background:var(--card);text-align:center
+    }
+    table.dataTable.table-dark tbody tr:hover td{background:#1a2030}
+    .dt-search input,.dt-length select{
+      background:#121622;color:var(--text);border:1px solid var(--border);
+      border-radius:8px;padding:6px 10px
+    }
+    .dt-paging .dt-paging-button{
+      background:#121622;color:var(--text);border:1px solid var(--border);
+      padding:6px 10px;margin:0 2px;border-radius:6px
+    }
+    .dt-paging .dt-paging-button.current{background:var(--accent);border-color:var(--accent);color:#041423}
 
-    /* DataTable overrides */
-    table.dataTable.table-dark { width: 100% !important; }
-    table.dataTable.table-dark thead th {
-      background: #1b2130; color: var(--text); border-bottom: 1px solid var(--border);
+    /* FixedHeader (keeps header visible while page scrolls) */
+    table.dataTable.table-dark thead th,
+    table.dataTable.table-dark thead td{white-space:nowrap}
+    div.fixedHeader-floating{               /* header that sticks to top */
+      background:#1b2130;border-bottom:1px solid var(--border);box-shadow:0 6px 24px rgba(0,0,0,.35);
+      z-index:1000
     }
-    table.dataTable.table-dark tbody td {
-      color: var(--text); border-top: 1px solid var(--border);
-      background: var(--card);
-    }
-    table.dataTable.table-dark tbody tr:hover td {
-      background: #1a2030;
-    }
-    .dt-search input, .dt-length select {
-      background: #121622; color: var(--text); border: 1px solid var(--border);
-      border-radius: 8px; padding: 6px 10px;
-    }
-    .dt-paging .dt-paging-button {
-      background: #121622; color: var(--text); border: 1px solid var(--border);
-      padding: 6px 10px; margin: 0 2px; border-radius: 6px;
-    }
-    .dt-paging .dt-paging-button.current {
-      background: var(--accent); border-color: var(--accent); color: #041423;
-    }
+    div.fixedHeader-floating th{background:#1b2130 !important;color:var(--text)!important}
   </style>
 
   <!-- Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
-  <!-- DataTables (v2) -->
+  <!-- DataTables v2 -->
   <link rel="stylesheet" href="https://cdn.datatables.net/2.0.8/css/dataTables.dataTables.min.css">
   <script src="https://cdn.datatables.net/2.0.8/js/dataTables.min.js"></script>
+
+  <!-- FixedHeader extension (works with v2) -->
+  <link rel="stylesheet" href="https://cdn.datatables.net/fixedheader/4.0.1/css/fixedHeader.dataTables.min.css">
+  <script src="https://cdn.datatables.net/fixedheader/4.0.1/js/dataTables.fixedHeader.min.js"></script>
 </head>
 <body>
   <h1>🏃‍♂️ Daily Activity Overview</h1>
@@ -95,85 +92,52 @@
 <script>
 async function getData(){
   const res = await fetch('/api/daily', { credentials: 'same-origin' });
-  const data = await res.json();
-  return data;
+  return res.json();
 }
-
-function ddmmyyyy(iso){
-  const [y,m,d] = iso.split('-');
-  return `${d}-${m}-${y}`;
-}
+function ddmmyyyy(iso){ const [y,m,d]=iso.split('-'); return `${d}-${m}-${y}`; }
 
 (async () => {
   const data = await getData();
 
-  // --- Charts ---
+  /* -------- Charts -------- */
   const labels = data.map(r => ddmmyyyy(r.date));
 
-  // Steps line with a soft gradient
   const stepsCtx = document.getElementById('stepsChart').getContext('2d');
-  const grad = stepsCtx.createLinearGradient(0, 0, 0, 300);
-  grad.addColorStop(0, 'rgba(90,166,255,0.35)');
-  grad.addColorStop(1, 'rgba(90,166,255,0.02)');
-
-  new Chart(stepsCtx, {
-    type: 'line',
-    data: {
-      labels,
-      datasets: [{
-        label: 'Steps',
-        data: data.map(r => r.steps || 0),
-        borderColor: '#5aa6ff',
-        backgroundColor: grad,
-        pointRadius: 0,
-        borderWidth: 2,
-        tension: 0.3,
-        fill: true
-      }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { labels: { color: '#eaeef7' } },
-        title: { display: true, text: 'Daily Steps', color: '#eaeef7' },
-        tooltip: { mode: 'index', intersect: false }
-      },
-      scales: {
-        x: { ticks: { color: '#a6b1c2' }, grid: { color: 'rgba(255,255,255,0.05)' } },
-        y: { ticks: { color: '#a6b1c2' }, grid: { color: 'rgba(255,255,255,0.05)' } }
-      }
+  const grad = stepsCtx.createLinearGradient(0,0,0,300);
+  grad.addColorStop(0,'rgba(90,166,255,0.35)'); grad.addColorStop(1,'rgba(90,166,255,0.02)');
+  new Chart(stepsCtx,{
+    type:'line',
+    data:{ labels, datasets:[{
+      label:'Steps', data:data.map(r=>r.steps||0), borderColor:'#5aa6ff',
+      backgroundColor:grad, pointRadius:0, borderWidth:2, tension:0.3, fill:true
+    }]},
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{labels:{color:'#eaeef7'}}, title:{display:true,text:'Daily Steps',color:'#eaeef7'}, tooltip:{mode:'index',intersect:false}},
+      scales:{ x:{ticks:{color:'#a6b1c2'},grid:{color:'rgba(255,255,255,0.05)'}},
+               y:{ticks:{color:'#a6b1c2'},grid:{color:'rgba(255,255,255,0.05)'}}}
     }
   });
 
-  // kcal bars (Active + Total)
   const kcalCtx = document.getElementById('kcalChart').getContext('2d');
-  new Chart(kcalCtx, {
-    type: 'bar',
-    data: {
+  new Chart(kcalCtx,{
+    type:'bar',
+    data:{
       labels,
-      datasets: [
-        { label: 'Active kcal', data: data.map(r => r.activeKcal || 0), backgroundColor: '#4ac7a5' },
-        { label: 'Total kcal',  data: data.map(r => r.totalKcal  || 0), backgroundColor: '#ff7b72' }
+      datasets:[
+        { label:'Active kcal', data:data.map(r=>r.activeKcal||0), backgroundColor:'#4ac7a5' },
+        { label:'Total kcal',  data:data.map(r=>r.totalKcal ||0), backgroundColor:'#ff7b72' }
       ]
     },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { labels: { color: '#eaeef7' } },
-        title: { display: true, text: 'Daily kcal (Active vs Total)', color: '#eaeef7' },
-        tooltip: { mode: 'index', intersect: false }
-      },
-      scales: {
-        x: { stacked: false, ticks: { color: '#a6b1c2' }, grid: { color: 'rgba(255,255,255,0.05)' } },
-        y: { stacked: false, ticks: { color: '#a6b1c2' }, grid: { color: 'rgba(255,255,255,0.05)' } }
-      }
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{labels:{color:'#eaeef7'}}, title:{display:true,text:'Daily kcal (Active vs Total)',color:'#eaeef7'}, tooltip:{mode:'index',intersect:false}},
+      scales:{ x:{ticks:{color:'#a6b1c2'},grid:{color:'rgba(255,255,255,0.05)'}},
+               y:{ticks:{color:'#a6b1c2'},grid:{color:'rgba(255,255,255,0.05)'}}}
     }
   });
 
-  // --- Table (sortable/searchable via DataTables) ---
-  // Build rows with proper date sorting using data-order = ISO date
+  /* -------- Table -------- */
   const tbody = document.querySelector('#data tbody');
   tbody.innerHTML = data.map(r => `
     <tr>
@@ -187,17 +151,21 @@ function ddmmyyyy(iso){
     </tr>
   `).join('');
 
-  // Initialize DataTables
-  new DataTable('#data', {
-    order: [[0, 'desc']],     // sort by Date (using data-order ISO) newest first
+  const dt = new DataTable('#data',{
+    order: [[0,'desc']],                 // default sort by Date (newest first)
+    ordering: true,                      // allow sorting on all columns (click header to toggle asc/desc)
     pageLength: 25,
-    lengthMenu: [10, 25, 50, 100],
-    layout: {
-      topStart: 'search',
-      topEnd: 'pageLength',
-      bottomStart: 'info',
-      bottomEnd: 'paging'
-    }
+    lengthMenu: [10,25,50,100],
+    fixedHeader: true,                   // keep header visible during scroll
+    layout:{
+      topStart:'search',
+      topEnd:'pageLength',
+      bottomStart:'info',
+      bottomEnd:'paging'
+    },
+    columnDefs:[
+      { targets:'_all', className:'dt-center' } // center all cells via DataTables class
+    ]
   });
 })();
 </script>
