@@ -53,13 +53,13 @@
   </style>
 
   <!-- Chart.js -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 
-  <!-- DataTables v2 + FixedHeader -->
-  <link rel="stylesheet" href="https://cdn.datatables.net/2.0.8/css/dataTables.dataTables.min.css">
-  <script src="https://cdn.datatables.net/2.0.8/js/dataTables.min.js"></script>
-  <link rel="stylesheet" href="https://cdn.datatables.net/fixedheader/4.0.1/css/fixedHeader.dataTables.min.css">
-  <script src="https://cdn.datatables.net/fixedheader/4.0.1/js/dataTables.fixedHeader.min.js"></script>
+  <!-- DataTables v2 (vanilla, no jQuery) + FixedHeader v4 -->
+  <link rel="stylesheet" href="https://cdn.datatables.net/2.0.8/css/dataTables.dataTables.min.css?v=2008">
+  <script src="https://cdn.datatables.net/2.0.8/js/dataTables.min.js?v=2008"></script>
+  <link rel="stylesheet" href="https://cdn.datatables.net/fixedheader/4.0.1/css/fixedHeader.dataTables.min.css?v=401">
+  <script src="https://cdn.datatables.net/fixedheader/4.0.1/js/dataTables.fixedHeader.min.js?v=401"></script>
 </head>
 <body>
   <h1>🏃‍♂️ Daily Activity Overview</h1>
@@ -98,6 +98,11 @@ async function getData(){
 function ddmmyyyy(iso){ const [y,m,d]=iso.split('-'); return `${d}-${m}-${y}`; }
 
 (async () => {
+  // Safety: wait until DataTables is actually present
+  if (typeof window.DataTable === 'undefined') {
+    console.error('DataTables not loaded. Check CDN/network.');
+  }
+
   const data = await getData();
 
   /* -------- Charts -------- */
@@ -123,13 +128,11 @@ function ddmmyyyy(iso){ const [y,m,d]=iso.split('-'); return `${d}-${m}-${y}`; }
   const kcalCtx = document.getElementById('kcalChart').getContext('2d');
   new Chart(kcalCtx,{
     type:'bar',
-    data:{
-      labels,
+    data:{ labels,
       datasets:[
         { label:'Active kcal', data:data.map(r=>r.activeKcal||0), backgroundColor:'#4ac7a5' },
         { label:'Total kcal',  data:data.map(r=>r.totalKcal ||0), backgroundColor:'#ff7b72' }
-      ]
-    },
+      ]},
     options:{
       responsive:true, maintainAspectRatio:false,
       plugins:{ legend:{labels:{color:'#eaeef7'}}, title:{display:true,text:'Daily kcal (Active vs Total)',color:'#eaeef7'}, tooltip:{mode:'index',intersect:false}},
@@ -153,14 +156,13 @@ function ddmmyyyy(iso){ const [y,m,d]=iso.split('-'); return `${d}-${m}-${y}`; }
     </tr>
   `).join('');
 
-  // DataTables v2
-  const dt = new DataTable('#data',{
-    order: [[0,'desc']],            // default sort by Date (newest first)
-    ordering: true,                 // allow sorting on all columns
+  new DataTable('#data',{
+    order: [[0,'desc']],            // default: newest date first
+    ordering: true,                 // click any header to sort asc/desc
     autoWidth: false,
     pageLength: 25,
     lengthMenu: [10,25,50,100],
-    fixedHeader: true,              // sticky header
+    fixedHeader: true,              // keep header visible during scroll
     layout:{
       topStart:'search',
       topEnd:'pageLength',
@@ -168,9 +170,7 @@ function ddmmyyyy(iso){ const [y,m,d]=iso.split('-'); return `${d}-${m}-${y}`; }
       bottomEnd:'paging'
     },
     columnDefs:[
-      // center header + body for all columns
       { targets: '_all', className: 'dt-head-center dt-body-center' },
-      // ensure numeric sorting for these columns
       { targets: [1,2,3,4,5], type: 'num' }
     ]
   });
