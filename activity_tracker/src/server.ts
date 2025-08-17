@@ -87,6 +87,25 @@ function isActiveEnergy(name?: string) {
   ].includes(n);
 }
 
+// New helper functions for local ISO date and week bounds
+function isoLocal(d: Date) {
+  const y = d.getFullYear();
+  const m = (d.getMonth() + 1).toString().padStart(2, '0');
+  const day = d.getDate().toString().padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+function weekBounds(today = new Date()) {
+  // Monday=1 ... Sunday=0 -> convert to Monday-based index
+  const dow = today.getDay();
+  const deltaToMon = (dow === 0 ? -6 : 1 - dow); // how many days to go back to Monday
+  const start = new Date(today);
+  start.setHours(0,0,0,0);
+  start.setDate(start.getDate() + deltaToMon);
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  return { start: isoLocal(start), end: isoLocal(end) };
+}
+
 (async function main() {
   await resolvePassword();
   if (!process.env.BASIC_PASSWORD) setInterval(resolvePassword, 6 * 60 * 60 * 1000);
@@ -271,6 +290,44 @@ function isActiveEnergy(name?: string) {
       (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
     );
     res.json(data);
+  });
+
+  // New protected API endpoints querying SQLite directly
+  app.get('/api/steps/today', basicAuth, (_req, res) => {
+    try {
+      const today = isoLocal(new Date());
+      const r = db.exec(`SELECT COALESCE(steps,0) AS s FROM day_stats WHERE date='${today}' LIMIT 1;`);
+      const steps = r.length && r[0].values.length ? Number(r[0].values[0][0] || 0) : 0;
+      res.json({ date: today, steps });
+    } catch (e) {
+      res.status(500).json({ error: 'failed', message: String(e) });
+    }
+  });
+
+  app.get('/api/steps/week', basicAuth, (_req, res) => {
+    try {
+      const { start, end } = weekBounds(new Date());
+      const r = db.exec(`SELECT COALESCE(SUM(steps),0) AS total FROM day_stats WHERE date >= '${start}' AND date <= '${end}';`);
+      const steps = r.length && r[0].values.length ? Number(r[0].values[0][0] || 0) : 0;
+      res.json({ start, end, steps });
+    } catch (e) {
+      res.status(500).json({ error: 'failed', message: String(e) });
+    }
+  });
+
+  // New public summary endpoint (no auth)
+  app.get('/public/steps', (_req, res) => {
+    try {
+      const today = isoLocal(new Date());
+      const { start, end } = weekBounds(new Date());
+      const r1 = db.exec(`SELECT COALESCE(steps,0) FROM day_stats WHERE date='${today}' LIMIT 1;`);
+      const todaySteps = r1.length && r1[0].values.length ? Number(r1[0].values[0][0] || 0) : 0;
+      const r2 = db.exec(`SELECT COALESCE(SUM(steps),0) FROM day_stats WHERE date >= '${start}' AND date <= '${end}';`);
+      const weekSteps = r2.length && r2[0].values.length ? Number(r2[0].values[0][0] || 0) : 0;
+      res.json({ today: { date: today, steps: todaySteps }, week: { start, end, steps: weekSteps } });
+    } catch (e) {
+      res.status(500).json({ error: 'failed', message: String(e) });
+    }
   });
 
   app.use('/', basicAuth, express.static(PUBLIC_DIR));

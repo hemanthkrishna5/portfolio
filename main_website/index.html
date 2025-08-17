@@ -39,18 +39,13 @@
         <div class="hero-card">
           <div class="stat">
             <div class="stat-label">Today</div>
-            <div class="stat-value" id="stat-steps">—</div>
+            <div class="stat-value" id="stat-steps-today">—</div>
             <div class="stat-sub">steps</div>
           </div>
           <div class="stat">
-            <div class="stat-label">Active</div>
-            <div class="stat-value" id="stat-kcal">—</div>
-            <div class="stat-sub">kcal</div>
-          </div>
-          <div class="stat">
-            <div class="stat-label">Workouts</div>
-            <div class="stat-value" id="stat-wk">—</div>
-            <div class="stat-sub">today</div>
+            <div class="stat-label">This week</div>
+            <div class="stat-value" id="stat-steps-week">—</div>
+            <div class="stat-sub">Mon → Sun</div>
           </div>
           <a class="mini-link" href="https://activity.tesseract.sbs" target="_blank" rel="noopener">Live stats →</a>
         </div>
@@ -93,17 +88,15 @@
     // Set year
     document.getElementById('y').textContent = new Date().getFullYear();
 
-    // Try to show a tiny snapshot from the tracker (non-blocking; ignore errors)
+    // Fetch public summary (no auth)
     (async () => {
       try {
-        const u = 'https://activity.tesseract.sbs/api/daily';
-        const res = await fetch(u, { credentials: 'omit' }); // will 401 if protected
+        const res = await fetch('https://activity.tesseract.sbs/public/steps', { credentials: 'omit' });
         if (!res.ok) return;
-        const data = await res.json();
-        const today = data[data.length - 1] || {};
-        if (today.steps != null) document.getElementById('stat-steps').textContent = Number(today.steps).toLocaleString();
-        if (today.activeKcal != null) document.getElementById('stat-kcal').textContent = Math.round(today.activeKcal);
-        if (today.workoutCount != null) document.getElementById('stat-wk').textContent = today.workoutCount;
+        const d = await res.json();
+        const n = (x) => Number(x || 0).toLocaleString();
+        document.getElementById('stat-steps-today').textContent = n(d?.today?.steps);
+        document.getElementById('stat-steps-week').textContent  = n(d?.week?.steps);
       } catch (_) {}
     })();
   </script>
