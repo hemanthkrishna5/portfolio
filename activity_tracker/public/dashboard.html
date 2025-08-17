@@ -1,67 +1,41 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="UTF-8" />
   <title>Activity Dashboard</title>
   <style>
-    body {
-      font-family: Arial, sans-serif;
-      background: #0e1117;
-      color: #fff;
-      margin: 0;
-      padding: 20px;
+    :root{
+      --bg:#0e1117; --header:#1f2937; --row:#121826; --rowHover:#182235; --muted:#9aa3af; --text:#e5e7eb; --border:#2b3546;
     }
-
-    h1 {
-      text-align: center;
-      margin-bottom: 20px;
+    html,body{background:var(--bg); color:var(--text); margin:0;}
+    h1{margin:24px 16px 8px; text-align:center;}
+    .table-wrap{
+      margin:0 16px 24px;
+      max-height:80vh; overflow-y:auto; overflow-x:auto;
+      border:1px solid var(--border); border-radius:8px;
     }
-
-    .table-container {
-      max-height: 80vh;
-      overflow-y: auto;
+    table{width:100%; border-collapse:collapse;}
+    thead th{
+      background:var(--header); color:var(--text);
+      position:sticky; top:0; z-index:2;
+      padding:10px; text-align:center; font-weight:700; cursor:pointer; white-space:nowrap;
+      border-bottom:1px solid var(--border);
     }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
+    tbody td{
+      text-align:center; padding:10px 8px; border-bottom:1px solid var(--border);
+      background:var(--row);
     }
-
-    thead th {
-      background: #1f2937;
-      color: #fff;
-      font-weight: bold;
-      text-align: center;
-      padding: 10px;
-      position: sticky;
-      top: 0;
-      cursor: pointer;
-    }
-
-    tbody td {
-      text-align: center;
-      padding: 8px;
-      border-bottom: 1px solid #333;
-    }
-
-    tbody tr:hover {
-      background: #2d3748;
-    }
-
-    .sort-asc::after {
-      content: " ▲";
-      font-size: 0.8em;
-    }
-    .sort-desc::after {
-      content: " ▼";
-      font-size: 0.8em;
-    }
+    tbody tr:hover td{background:var(--rowHover);}
+    .muted{color:var(--muted);}
+    .sort-asc::after{content:" ▲"; font-size:.8em;}
+    .sort-desc::after{content:" ▼"; font-size:.8em;}
+    .empty{padding:24px; text-align:center; color:var(--muted);}
   </style>
 </head>
 <body>
   <h1>Activity Dashboard</h1>
 
-  <div class="table-container">
+  <div class="table-wrap">
     <table id="activityTable">
       <thead>
         <tr>
@@ -75,74 +49,97 @@
         </tr>
       </thead>
       <tbody id="activityBody">
-        <!-- rows will be filled by script -->
+        <tr><td colspan="7" class="empty muted">Loading…</td></tr>
       </tbody>
     </table>
   </div>
 
   <script>
-    async function fetchData() {
-      const res = await fetch("/data");
-      const data = await res.json();
-      const body = document.getElementById("activityBody");
-      console.log("Fetched data:", data);
-      body.innerHTML = "";
+    const table = document.getElementById("activityTable");
+    const tbody = document.getElementById("activityBody");
+    const headers = table.querySelectorAll("th");
+    let sortState = { col: 0, dir: "desc" }; // default: date desc
 
-      data.forEach(day => {
+    const num = (v) => {
+      const t = String(v ?? "").replace(/,/g, "").trim();
+      const n = Number(t);
+      return Number.isFinite(n) ? n : NaN;
+    };
+
+    function renderRows(rows){
+      if (!rows || rows.length === 0){
+        tbody.innerHTML = `<tr><td class="empty muted" colspan="7">No data</td></tr>`;
+        return;
+      }
+      const frag = document.createDocumentFragment();
+      rows.forEach(r=>{
         const tr = document.createElement("tr");
         tr.innerHTML = `
-          <td>${day.date}</td>
-          <td>${day.steps}</td>
-          <td>${day.activeKcal}</td>
-          <td>${day.totalKcal}</td>
-          <td>${day.workoutCount}</td>
-          <td>${day.workoutMinutes.toFixed(1)}</td>
-          <td>${(day.workoutNames || []).join(", ")}</td>
+          <td>${r.date}</td>
+          <td>${r.steps ?? 0}</td>
+          <td>${(r.activeKcal ?? 0)}</td>
+          <td>${(r.totalKcal ?? 0)}</td>
+          <td>${r.workoutCount ?? 0}</td>
+          <td>${(r.workoutMinutes ?? 0).toFixed(1)}</td>
+          <td>${(r.workoutNames ?? []).join(", ")}</td>
         `;
-        body.appendChild(tr);
+        frag.appendChild(tr);
       });
+      tbody.innerHTML = "";
+      tbody.appendChild(frag);
     }
 
-    // Sorting logic
-    const table = document.getElementById("activityTable");
-    const headers = table.querySelectorAll("th");
-    let sortState = {};
+    function sortTable(col, dir){
+      const rows = Array.from(tbody.querySelectorAll("tr")).filter(tr => !tr.querySelector(".empty"));
+      if (!rows.length) return;
 
-    headers.forEach(header => {
-      header.addEventListener("click", () => {
-        const col = header.dataset.col;
-        const tbody = table.querySelector("tbody");
-        const rows = Array.from(tbody.querySelectorAll("tr"));
-        const isNumeric = !isNaN(rows[0].children[col].innerText.trim());
+      const isNumericCol = col !== 0 && col !== 6; // date and names are strings
+      rows.sort((a,b)=>{
+        let A = a.children[col].textContent.trim();
+        let B = b.children[col].textContent.trim();
+        if (isNumericCol){
+          A = num(A); B = num(B);
+          if (Number.isNaN(A)) A = -Infinity;
+          if (Number.isNaN(B)) B = -Infinity;
+        }
+        if (dir === "asc") return A > B ? 1 : (A < B ? -1 : 0);
+        return A < B ? 1 : (A > B ? -1 : 0);
+      });
 
-        const currentState = sortState[col] || "desc";
-        const newState = currentState === "asc" ? "desc" : "asc";
-        sortState = {}; // reset others
-        sortState[col] = newState;
+      tbody.innerHTML = "";
+      rows.forEach(r=>tbody.appendChild(r));
 
-        headers.forEach(h => h.classList.remove("sort-asc", "sort-desc"));
-        header.classList.add(newState === "asc" ? "sort-asc" : "sort-desc");
+      headers.forEach(h=>h.classList.remove("sort-asc","sort-desc"));
+      const hdr = [...headers].find(h=>h.dataset.col == col);
+      hdr && hdr.classList.add(dir === "asc" ? "sort-asc" : "sort-desc");
+    }
 
-        rows.sort((a, b) => {
-          let A = a.children[col].innerText.trim();
-          let B = b.children[col].innerText.trim();
-
-          if (isNumeric) {
-            A = parseFloat(A) || 0;
-            B = parseFloat(B) || 0;
-          }
-
-          if (newState === "asc") {
-            return A > B ? 1 : A < B ? -1 : 0;
-          } else {
-            return A < B ? 1 : A > B ? -1 : 0;
-          }
-        });
-
-        tbody.innerHTML = "";
-        rows.forEach(r => tbody.appendChild(r));
+    headers.forEach(h=>{
+      h.addEventListener("click", ()=>{
+        const col = Number(h.dataset.col);
+        const dir = (sortState.col === col && sortState.dir === "asc") ? "desc" : "asc";
+        sortState = { col, dir };
+        sortTable(col, dir);
       });
     });
+
+    async function fetchData(){
+      try{
+        // FIX: correct API and include credentials (Basic Auth is already established)
+        const res = await fetch("/api/daily", { credentials: "same-origin" });
+        if (!res.ok){
+          tbody.innerHTML = `<tr><td class="empty muted" colspan="7">Error ${res.status}: ${res.statusText}</td></tr>`;
+          return;
+        }
+        const data = await res.json();
+        renderRows(data);
+        // default sort: Date desc
+        sortTable(sortState.col, sortState.dir);
+      }catch(e){
+        tbody.innerHTML = `<tr><td class="empty muted" colspan="7">Failed to load data</td></tr>`;
+        console.error(e);
+      }
+    }
 
     fetchData();
   </script>
