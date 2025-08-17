@@ -202,11 +202,27 @@ function weekBounds(today = new Date()) {
       date: d, steps: 0, activeKcal: 0, totalKcal: 0,
       workoutCount: 0, workoutMinutes: 0, workoutNames: [],
     };
+  
     prev.workoutCount += 1;
     prev.workoutMinutes += mins;
     prev.activeKcal += kcal;
+  
+    // 👇 Add steps only if workout has steps AND type matches
+    if (
+      w.steps &&
+      (w.name === "Outdoor Walk" ||
+       w.name === "Indoor Walk" ||
+       w.name === "Running")
+    ) {
+      prev.steps += w.steps;
+    }
+  
     prev.totalKcal = prev.activeKcal + 1745;
-    if (w.name) prev.workoutNames = [...new Set([...(prev.workoutNames || []), w.name])];
+  
+    if (w.name) {
+      prev.workoutNames = [...new Set([...(prev.workoutNames || []), w.name])];
+    }
+  
     dayMap.set(d, prev);
     saveDay(d, prev);
   }
