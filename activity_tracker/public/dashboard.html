@@ -42,21 +42,22 @@
     /* FixedHeader (keeps header visible while page scrolls) */
     table.dataTable.table-dark thead th,
     table.dataTable.table-dark thead td{white-space:nowrap}
-    div.fixedHeader-floating{               /* header that sticks to top */
+    div.fixedHeader-floating{
       background:#1b2130;border-bottom:1px solid var(--border);box-shadow:0 6px 24px rgba(0,0,0,.35);
       z-index:1000
     }
     div.fixedHeader-floating th{background:#1b2130 !important;color:var(--text)!important}
+
+    /* CSS fallback if FixedHeader can’t attach (rare) */
+    table.sticky-head thead th{position:sticky;top:0;z-index:5}
   </style>
 
   <!-- Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
-  <!-- DataTables v2 -->
+  <!-- DataTables v2 + FixedHeader -->
   <link rel="stylesheet" href="https://cdn.datatables.net/2.0.8/css/dataTables.dataTables.min.css">
   <script src="https://cdn.datatables.net/2.0.8/js/dataTables.min.js"></script>
-
-  <!-- FixedHeader extension (works with v2) -->
   <link rel="stylesheet" href="https://cdn.datatables.net/fixedheader/4.0.1/css/fixedHeader.dataTables.min.css">
   <script src="https://cdn.datatables.net/fixedheader/4.0.1/js/dataTables.fixedHeader.min.js"></script>
 </head>
@@ -73,7 +74,7 @@
   </div>
 
   <div class="card">
-    <table id="data" class="display table-dark" style="width:100%">
+    <table id="data" class="display table-dark sticky-head" style="width:100%">
       <thead>
         <tr>
           <th>Date</th>
@@ -141,22 +142,25 @@ function ddmmyyyy(iso){ const [y,m,d]=iso.split('-'); return `${d}-${m}-${y}`; }
   const tbody = document.querySelector('#data tbody');
   tbody.innerHTML = data.map(r => `
     <tr>
+      <!-- use data-order with ISO date so sorting works by real date -->
       <td data-order="${r.date}">${ddmmyyyy(r.date)}</td>
-      <td>${r.steps ?? 0}</td>
-      <td>${(r.activeKcal ?? 0).toFixed(0)}</td>
-      <td>${(r.totalKcal  ?? 0).toFixed(0)}</td>
-      <td>${r.workoutCount ?? 0}</td>
-      <td>${(r.workoutMinutes ?? 0).toFixed(1)}</td>
+      <td data-order="${r.steps ?? 0}">${r.steps ?? 0}</td>
+      <td data-order="${r.activeKcal ?? 0}">${(r.activeKcal ?? 0).toFixed(0)}</td>
+      <td data-order="${r.totalKcal ?? 0}">${(r.totalKcal ?? 0).toFixed(0)}</td>
+      <td data-order="${r.workoutCount ?? 0}">${r.workoutCount ?? 0}</td>
+      <td data-order="${r.workoutMinutes ?? 0}">${(r.workoutMinutes ?? 0).toFixed(1)}</td>
       <td>${(r.workoutNames ?? []).join(', ')}</td>
     </tr>
   `).join('');
 
+  // DataTables v2
   const dt = new DataTable('#data',{
-    order: [[0,'desc']],                 // default sort by Date (newest first)
-    ordering: true,                      // allow sorting on all columns (click header to toggle asc/desc)
+    order: [[0,'desc']],            // default sort by Date (newest first)
+    ordering: true,                 // allow sorting on all columns
+    autoWidth: false,
     pageLength: 25,
     lengthMenu: [10,25,50,100],
-    fixedHeader: true,                   // keep header visible during scroll
+    fixedHeader: true,              // sticky header
     layout:{
       topStart:'search',
       topEnd:'pageLength',
@@ -164,7 +168,10 @@ function ddmmyyyy(iso){ const [y,m,d]=iso.split('-'); return `${d}-${m}-${y}`; }
       bottomEnd:'paging'
     },
     columnDefs:[
-      { targets:'_all', className:'dt-center' } // center all cells via DataTables class
+      // center header + body for all columns
+      { targets: '_all', className: 'dt-head-center dt-body-center' },
+      // ensure numeric sorting for these columns
+      { targets: [1,2,3,4,5], type: 'num' }
     ]
   });
 })();
