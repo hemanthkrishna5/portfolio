@@ -1,147 +1,211 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html>
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="utf-8" />
   <title>Activity Dashboard</title>
+
   <style>
-    :root{
-      --bg:#0e1117; --header:#1f2937; --row:#121826; --rowHover:#182235; --muted:#9aa3af; --text:#e5e7eb; --border:#2b3546;
+    :root {
+      --bg: #0f1115;
+      --card: #151924;
+      --text: #eaeef7;
+      --muted: #a6b1c2;
+      --accent: #5aa6ff;
+      --accent2: #ff7b72;
+      --accent3: #4ac7a5;
+      --border: #2a3142;
     }
-    html,body{background:var(--bg); color:var(--text); margin:0;}
-    h1{margin:24px 16px 8px; text-align:center;}
-    .table-wrap{
-      margin:0 16px 24px;
-      max-height:80vh; overflow-y:auto; overflow-x:auto;
-      border:1px solid var(--border); border-radius:8px;
+    html, body { background: var(--bg); color: var(--text); }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 2rem; }
+    h1 { margin: 0 0 1rem; }
+    .subtle { color: var(--muted); margin: 0 0 2rem; }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 20px;
+      box-shadow: 0 6px 24px rgba(0,0,0,.25);
     }
-    table{width:100%; border-collapse:collapse;}
-    thead th{
-      background:var(--header); color:var(--text);
-      position:sticky; top:0; z-index:2;
-      padding:10px; text-align:center; font-weight:700; cursor:pointer; white-space:nowrap;
-      border-bottom:1px solid var(--border);
+
+    canvas { max-width: 100%; height: 360px; }
+
+    /* DataTable overrides */
+    table.dataTable.table-dark { width: 100% !important; }
+    table.dataTable.table-dark thead th {
+      background: #1b2130; color: var(--text); border-bottom: 1px solid var(--border);
+      text-align: center;
+      position: sticky; top: 0; z-index: 2; /* sticky header while scrolling */
     }
-    tbody td{
-      text-align:center; padding:10px 8px; border-bottom:1px solid var(--border);
-      background:var(--row);
+    table.dataTable.table-dark tbody td {
+      color: var(--text); border-top: 1px solid var(--border);
+      background: var(--card); text-align: center;
     }
-    tbody tr:hover td{background:var(--rowHover);}
-    .muted{color:var(--muted);}
-    .sort-asc::after{content:" ▲"; font-size:.8em;}
-    .sort-desc::after{content:" ▼"; font-size:.8em;}
-    .empty{padding:24px; text-align:center; color:var(--muted);}
+    table.dataTable.table-dark tbody tr:hover td {
+      background: #1a2030;
+    }
+    .dt-search input, .dt-length select {
+      background: #121622; color: var(--text); border: 1px solid var(--border);
+      border-radius: 8px; padding: 6px 10px;
+    }
+    .dt-paging .dt-paging-button {
+      background: #121622; color: var(--text); border: 1px solid var(--border);
+      padding: 6px 10px; margin: 0 2px; border-radius: 6px;
+    }
+    .dt-paging .dt-paging-button.current {
+      background: var(--accent); border-color: var(--accent); color: #041423;
+    }
   </style>
+
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <!-- DataTables (v2) -->
+  <link rel="stylesheet" href="https://cdn.datatables.net/2.0.8/css/dataTables.dataTables.min.css">
+  <script src="https://cdn.datatables.net/2.0.8/js/dataTables.min.js"></script>
 </head>
 <body>
-  <h1>Activity Dashboard</h1>
+  <h1>🏃‍♂️ Daily Activity Overview</h1>
+  <p class="subtle">“Total kcal” = Active kcal + 1745 (fixed baseline)</p>
 
-  <div class="table-wrap">
-    <table id="activityTable">
+  <div class="card">
+    <canvas id="stepsChart"></canvas>
+  </div>
+
+  <div class="card">
+    <canvas id="kcalChart"></canvas>
+  </div>
+
+  <div class="card">
+    <table id="data" class="display table-dark" style="width:100%">
       <thead>
         <tr>
-          <th data-col="0">Date</th>
-          <th data-col="1">Steps</th>
-          <th data-col="2">Active kcal</th>
-          <th data-col="3">Total kcal</th>
-          <th data-col="4"># Workouts</th>
-          <th data-col="5">Minutes</th>
-          <th data-col="6">Workout Names</th>
+          <th>Date</th>
+          <th>Steps</th>
+          <th>Active kcal</th>
+          <th>Total kcal</th>
+          <th># Workouts</th>
+          <th>Minutes</th>
+          <th>Workout Names</th>
         </tr>
       </thead>
-      <tbody id="activityBody">
-        <tr><td colspan="7" class="empty muted">Loading…</td></tr>
-      </tbody>
+      <tbody></tbody>
     </table>
   </div>
 
-  <script>
-    const table = document.getElementById("activityTable");
-    const tbody = document.getElementById("activityBody");
-    const headers = table.querySelectorAll("th");
-    let sortState = { col: 0, dir: "desc" }; // default: date desc
+<script>
+async function getData(){
+  const res = await fetch('/api/daily', { credentials: 'same-origin' });
+  if (!res.ok) throw new Error('Failed to load /api/daily: ' + res.status);
+  return await res.json();
+}
 
-    const num = (v) => {
-      const t = String(v ?? "").replace(/,/g, "").trim();
-      const n = Number(t);
-      return Number.isFinite(n) ? n : NaN;
-    };
+function ddmmyyyy(iso){
+  const [y,m,d] = iso.split('-');
+  return `${d}-${m}-${y}`;
+}
 
-    function renderRows(rows){
-      if (!rows || rows.length === 0){
-        tbody.innerHTML = `<tr><td class="empty muted" colspan="7">No data</td></tr>`;
-        return;
-      }
-      const frag = document.createDocumentFragment();
-      rows.forEach(r=>{
-        const tr = document.createElement("tr");
-        tr.innerHTML = `
-          <td>${r.date}</td>
-          <td>${r.steps ?? 0}</td>
-          <td>${(r.activeKcal ?? 0)}</td>
-          <td>${(r.totalKcal ?? 0)}</td>
-          <td>${r.workoutCount ?? 0}</td>
-          <td>${(r.workoutMinutes ?? 0).toFixed(1)}</td>
-          <td>${(r.workoutNames ?? []).join(", ")}</td>
-        `;
-        frag.appendChild(tr);
-      });
-      tbody.innerHTML = "";
-      tbody.appendChild(frag);
-    }
+(async () => {
+  const data = await getData();
 
-    function sortTable(col, dir){
-      const rows = Array.from(tbody.querySelectorAll("tr")).filter(tr => !tr.querySelector(".empty"));
-      if (!rows.length) return;
+  // --- Charts ---
+  const labels = data.map(r => ddmmyyyy(r.date));
 
-      const isNumericCol = col !== 0 && col !== 6; // date and names are strings
-      rows.sort((a,b)=>{
-        let A = a.children[col].textContent.trim();
-        let B = b.children[col].textContent.trim();
-        if (isNumericCol){
-          A = num(A); B = num(B);
-          if (Number.isNaN(A)) A = -Infinity;
-          if (Number.isNaN(B)) B = -Infinity;
-        }
-        if (dir === "asc") return A > B ? 1 : (A < B ? -1 : 0);
-        return A < B ? 1 : (A > B ? -1 : 0);
-      });
+  // Steps line with a soft gradient
+  const stepsCtx = document.getElementById('stepsChart').getContext('2d');
+  const grad = stepsCtx.createLinearGradient(0, 0, 0, 300);
+  grad.addColorStop(0, 'rgba(90,166,255,0.35)');
+  grad.addColorStop(1, 'rgba(90,166,255,0.02)');
 
-      tbody.innerHTML = "";
-      rows.forEach(r=>tbody.appendChild(r));
-
-      headers.forEach(h=>h.classList.remove("sort-asc","sort-desc"));
-      const hdr = [...headers].find(h=>h.dataset.col == col);
-      hdr && hdr.classList.add(dir === "asc" ? "sort-asc" : "sort-desc");
-    }
-
-    headers.forEach(h=>{
-      h.addEventListener("click", ()=>{
-        const col = Number(h.dataset.col);
-        const dir = (sortState.col === col && sortState.dir === "asc") ? "desc" : "asc";
-        sortState = { col, dir };
-        sortTable(col, dir);
-      });
-    });
-
-    async function fetchData(){
-      try{
-        // FIX: correct API and include credentials (Basic Auth is already established)
-        const res = await fetch("/api/daily", { credentials: "same-origin" });
-        if (!res.ok){
-          tbody.innerHTML = `<tr><td class="empty muted" colspan="7">Error ${res.status}: ${res.statusText}</td></tr>`;
-          return;
-        }
-        const data = await res.json();
-        renderRows(data);
-        // default sort: Date desc
-        sortTable(sortState.col, sortState.dir);
-      }catch(e){
-        tbody.innerHTML = `<tr><td class="empty muted" colspan="7">Failed to load data</td></tr>`;
-        console.error(e);
+  new Chart(stepsCtx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Steps',
+        data: data.map(r => r.steps || 0),
+        borderColor: '#5aa6ff',
+        backgroundColor: grad,
+        pointRadius: 0,
+        borderWidth: 2,
+        tension: 0.3,
+        fill: true
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { labels: { color: '#eaeef7' } },
+        title: { display: true, text: 'Daily Steps', color: '#eaeef7' },
+        tooltip: { mode: 'index', intersect: false }
+      },
+      scales: {
+        x: { ticks: { color: '#a6b1c2' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+        y: { ticks: { color: '#a6b1c2' }, grid: { color: 'rgba(255,255,255,0.05)' } }
       }
     }
+  });
 
-    fetchData();
-  </script>
+  // kcal bars (Active + Total)
+  const kcalCtx = document.getElementById('kcalChart').getContext('2d');
+  new Chart(kcalCtx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Active kcal', data: data.map(r => r.activeKcal || 0), backgroundColor: '#4ac7a5' },
+        { label: 'Total kcal',  data: data.map(r => r.totalKcal  || 0), backgroundColor: '#ff7b72' }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { labels: { color: '#eaeef7' } },
+        title: { display: true, text: 'Daily kcal (Active vs Total)', color: '#eaeef7' },
+        tooltip: { mode: 'index', intersect: false }
+      },
+      scales: {
+        x: { stacked: false, ticks: { color: '#a6b1c2' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+        y: { stacked: false, ticks: { color: '#a6b1c2' }, grid: { color: 'rgba(255,255,255,0.05)' } }
+      }
+    }
+  });
+
+  // --- Table (sortable/searchable via DataTables) ---
+  // Build rows with proper date sorting using data-order = ISO date
+  const tbody = document.querySelector('#data tbody');
+  tbody.innerHTML = data.map(r => `
+    <tr>
+      <td data-order="${r.date}">${ddmmyyyy(r.date)}</td>
+      <td>${r.steps ?? 0}</td>
+      <td>${(r.activeKcal ?? 0).toFixed(0)}</td>
+      <td>${(r.totalKcal  ?? 0).toFixed(0)}</td>
+      <td>${r.workoutCount ?? 0}</td>
+      <td>${(r.workoutMinutes ?? 0).toFixed(1)}</td>
+      <td>${(r.workoutNames ?? []).join(', ')}</td>
+    </tr>
+  `).join('');
+
+  // Initialize DataTables
+  new DataTable('#data', {
+    order: [[0, 'desc']],     // sort by Date (using data-order ISO) newest first
+    pageLength: 25,
+    lengthMenu: [10, 25, 50, 100],
+    layout: {
+      topStart: 'search',
+      topEnd: 'pageLength',
+      bottomStart: 'info',
+      bottomEnd: 'paging'
+    }
+  });
+})().catch(err => {
+  console.error(err);
+  const tbody = document.querySelector('#data tbody');
+  tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:#a6b1c2">Failed to load data</td></tr>`;
+});
+</script>
 </body>
 </html>
