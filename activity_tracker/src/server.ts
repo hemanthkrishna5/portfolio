@@ -315,17 +315,39 @@ function weekBounds(today = new Date()) {
     }
   });
 
-  // New public summary endpoint (no auth)
+  // Allow CORS so the Pages site (tesseract.sbs) can read the JSON
+  app.options('/public/steps', (_req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.sendStatus(204);
+  });
+
   app.get('/public/steps', (_req, res) => {
     try {
+      res.setHeader('Access-Control-Allow-Origin', '*');
+
       const today = isoLocal(new Date());
       const { start, end } = weekBounds(new Date());
-      const r1 = db.exec(`SELECT COALESCE(steps,0) FROM day_stats WHERE date='${today}' LIMIT 1;`);
-      const todaySteps = r1.length && r1[0].values.length ? Number(r1[0].values[0][0] || 0) : 0;
-      const r2 = db.exec(`SELECT COALESCE(SUM(steps),0) FROM day_stats WHERE date >= '${start}' AND date <= '${end}';`);
-      const weekSteps = r2.length && r2[0].values.length ? Number(r2[0].values[0][0] || 0) : 0;
-      res.json({ today: { date: today, steps: todaySteps }, week: { start, end, steps: weekSteps } });
+
+      const r1 = db.exec(
+        `SELECT COALESCE(steps,0) FROM day_stats WHERE date='${today}' LIMIT 1;`
+      );
+      const todaySteps =
+        r1.length && r1[0].values.length ? Number(r1[0].values[0][0] || 0) : 0;
+
+      const r2 = db.exec(
+        `SELECT COALESCE(SUM(steps),0) FROM day_stats WHERE date >= '${start}' AND date <= '${end}';`
+      );
+      const weekSteps =
+        r2.length && r2[0].values.length ? Number(r2[0].values[0][0] || 0) : 0;
+
+      res.json({
+        today: { date: today, steps: todaySteps },
+        week: { start, end, steps: weekSteps },
+      });
     } catch (e) {
+      res.setHeader('Access-Control-Allow-Origin', '*');
       res.status(500).json({ error: 'failed', message: String(e) });
     }
   });
