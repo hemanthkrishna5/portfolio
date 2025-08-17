@@ -85,6 +85,7 @@
       const res = await fetch("/data");
       const data = await res.json();
       const body = document.getElementById("activityBody");
+      console.log("Fetched data:", data);
       body.innerHTML = "";
 
       data.forEach(day => {
