@@ -87,7 +87,7 @@ function isActiveEnergy(name?: string) {
   ].includes(n);
 }
 
-// New helper functions for local ISO date and week bounds
+// Helpers: local ISO date and week bounds (Mon → Sun)
 function isoLocal(d: Date) {
   const y = d.getFullYear();
   const m = (d.getMonth() + 1).toString().padStart(2, '0');
@@ -95,9 +95,8 @@ function isoLocal(d: Date) {
   return `${y}-${m}-${day}`;
 }
 function weekBounds(today = new Date()) {
-  // Monday=1 ... Sunday=0 -> convert to Monday-based index
   const dow = today.getDay();
-  const deltaToMon = (dow === 0 ? -6 : 1 - dow); // how many days to go back to Monday
+  const deltaToMon = (dow === 0 ? -6 : 1 - dow);
   const start = new Date(today);
   start.setHours(0,0,0,0);
   start.setDate(start.getDate() + deltaToMon);
@@ -197,32 +196,32 @@ function weekBounds(today = new Date()) {
     const d = (w.start || '').split(' ')[0] || 'unknown';
     const mins = (w.duration || 0) / 60;
     const kcal = w.activeEnergyBurned ? kJtoKcal(w.activeEnergyBurned.qty, w.activeEnergyBurned.units) : 0;
-  
+
     const prev = dayMap.get(d) || {
       date: d, steps: 0, activeKcal: 0, totalKcal: 0,
       workoutCount: 0, workoutMinutes: 0, workoutNames: [],
     };
-  
+
     prev.workoutCount += 1;
     prev.workoutMinutes += mins;
     prev.activeKcal += kcal;
-  
-    // 👇 Add steps only if workout has steps AND type matches
+
+    // Add steps only if workout includes steps AND is a walking/running type
     if (
       w.steps &&
-      (w.name === "Outdoor Walk" ||
-       w.name === "Indoor Walk" ||
-       w.name === "Running")
+      (w.name === 'Outdoor Walk' ||
+       w.name === 'Indoor Walk' ||
+       w.name === 'Running')
     ) {
       prev.steps += w.steps;
     }
-  
+
     prev.totalKcal = prev.activeKcal + 1745;
-  
+
     if (w.name) {
       prev.workoutNames = [...new Set([...(prev.workoutNames || []), w.name])];
     }
-  
+
     dayMap.set(d, prev);
     saveDay(d, prev);
   }
@@ -247,8 +246,8 @@ function weekBounds(today = new Date()) {
     next(err);
   });
 
-  // -------- Health Auto Export endpoint (Basic Auth) --------
-  // Accepts: { "data": { "metrics": [...], "workouts": [...] } }
+  // ---------------- WRITE (protected) ----------------
+  // Health Auto Export endpoint (expects: { data: { metrics: [...], workouts: [...] } })
   app.post('/hae', basicAuth, (req: Request, res: Response) => {
     const payload = req.body?.data || {};
     const metrics: any[] = payload.metrics || [];
@@ -269,7 +268,6 @@ function weekBounds(today = new Date()) {
     res.sendStatus(200);
   });
 
-  // Back-compat endpoints (keep Basic Auth)
   app.post('/steps', basicAuth, (req, res) => {
     (req.body?.data?.metrics || []).forEach((m: any) => {
       const key = m.identifier || m.name;
@@ -294,8 +292,9 @@ function weekBounds(today = new Date()) {
     res.sendStatus(200);
   });
 
-  // API + dashboard (protected)
-  app.use('/api', basicAuth);
+  // ---------------- READ (public) ----------------
+  // Make all read-only data public (no Basic Auth)
+
   app.get('/api/daily', (_req, res) => {
     const data = [...dayMap.values()].sort(
       (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
@@ -303,8 +302,7 @@ function weekBounds(today = new Date()) {
     res.json(data);
   });
 
-  // New protected API endpoints querying SQLite directly
-  app.get('/api/steps/today', basicAuth, (_req, res) => {
+  app.get('/api/steps/today', (_req, res) => {
     try {
       const today = isoLocal(new Date());
       const r = db.exec(`SELECT COALESCE(steps,0) AS s FROM day_stats WHERE date='${today}' LIMIT 1;`);
@@ -315,7 +313,7 @@ function weekBounds(today = new Date()) {
     }
   });
 
-  app.get('/api/steps/week', basicAuth, (_req, res) => {
+  app.get('/api/steps/week', (_req, res) => {
     try {
       const { start, end } = weekBounds(new Date());
       const r = db.exec(`SELECT COALESCE(SUM(steps),0) AS total FROM day_stats WHERE date >= '${start}' AND date <= '${end}';`);
@@ -326,7 +324,7 @@ function weekBounds(today = new Date()) {
     }
   });
 
-  // Allow CORS so the Pages site (tesseract.sbs) can read the JSON
+  // Public, CORS-enabled compact summary (for your Pages site)
   app.options('/public/steps', (_req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -363,15 +361,16 @@ function weekBounds(today = new Date()) {
     }
   });
 
-  app.use('/', basicAuth, express.static(PUBLIC_DIR));
-  app.get('/', basicAuth, (_req, res) => {
+  // -------- Static site: PUBLIC --------
+  app.use('/', express.static(PUBLIC_DIR));
+  app.get('/', (_req, res) => {
     res.sendFile(path.join(PUBLIC_DIR, 'dashboard.html'));
   });
 
   const server = app.listen(PORT, () => {
     console.log(`Listening on http://localhost:${PORT}`);
-    console.log(`🔑 Basic auth user: ${BASIC_USER}`);
-    console.log(`🔑 Basic auth password: ${BASIC_PASSWORD || '(empty!)'}`);
+    console.log(`🔑 Basic auth user (for POSTs): ${BASIC_USER}`);
+    console.log(`🔑 Basic auth password (for POSTs): ${BASIC_PASSWORD || '(empty!)'}`);
   });
 
   // longer timeouts for large uploads
