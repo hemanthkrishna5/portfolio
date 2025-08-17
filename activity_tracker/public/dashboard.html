@@ -35,12 +35,10 @@
     table.dataTable.table-dark { width: 100% !important; }
     table.dataTable.table-dark thead th {
       background: #1b2130; color: var(--text); border-bottom: 1px solid var(--border);
-      text-align: center;
-      position: sticky; top: 0; z-index: 2; /* sticky header while scrolling */
     }
     table.dataTable.table-dark tbody td {
       color: var(--text); border-top: 1px solid var(--border);
-      background: var(--card); text-align: center;
+      background: var(--card);
     }
     table.dataTable.table-dark tbody tr:hover td {
       background: #1a2030;
@@ -97,8 +95,8 @@
 <script>
 async function getData(){
   const res = await fetch('/api/daily', { credentials: 'same-origin' });
-  if (!res.ok) throw new Error('Failed to load /api/daily: ' + res.status);
-  return await res.json();
+  const data = await res.json();
+  return data;
 }
 
 function ddmmyyyy(iso){
@@ -201,11 +199,7 @@ function ddmmyyyy(iso){
       bottomEnd: 'paging'
     }
   });
-})().catch(err => {
-  console.error(err);
-  const tbody = document.querySelector('#data tbody');
-  tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:#a6b1c2">Failed to load data</td></tr>`;
-});
+})();
 </script>
 </body>
 </html>
