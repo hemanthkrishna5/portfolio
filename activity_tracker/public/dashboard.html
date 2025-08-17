@@ -1,205 +1,153 @@
-<!doctype html>
-<html>
+<!DOCTYPE html>
+<html lang="en">
 <head>
-  <meta charset="utf-8" />
+  <meta charset="UTF-8">
   <title>Activity Dashboard</title>
-
   <style>
-    :root {
-      --bg: #0f1115;
-      --card: #151924;
-      --text: #eaeef7;
-      --muted: #a6b1c2;
-      --accent: #5aa6ff;
-      --accent2: #ff7b72;
-      --accent3: #4ac7a5;
-      --border: #2a3142;
-    }
-    html, body { background: var(--bg); color: var(--text); }
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 2rem; }
-    h1 { margin: 0 0 1rem; }
-    .subtle { color: var(--muted); margin: 0 0 2rem; }
-
-    .card {
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 16px;
-      margin-bottom: 20px;
-      box-shadow: 0 6px 24px rgba(0,0,0,.25);
+    body {
+      font-family: Arial, sans-serif;
+      background: #0e1117;
+      color: #fff;
+      margin: 0;
+      padding: 20px;
     }
 
-    canvas { max-width: 100%; height: 360px; }
+    h1 {
+      text-align: center;
+    }
 
-    /* DataTable overrides */
-    table.dataTable.table-dark { width: 100% !important; }
-    table.dataTable.table-dark thead th {
-      background: #1b2130; color: var(--text); border-bottom: 1px solid var(--border);
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 20px;
+      table-layout: fixed;
     }
-    table.dataTable.table-dark tbody td {
-      color: var(--text); border-top: 1px solid var(--border);
-      background: var(--card);
+
+    thead th {
+      background: #1f2937;
+      color: #fff;
+      font-weight: bold;
+      text-align: center;
+      padding: 10px;
+      position: sticky;
+      top: 0;
+      cursor: pointer;
+      z-index: 2;
     }
-    table.dataTable.table-dark tbody tr:hover td {
-      background: #1a2030;
+
+    tbody td {
+      text-align: center;
+      padding: 8px;
+      border-bottom: 1px solid #333;
     }
-    .dt-search input, .dt-length select {
-      background: #121622; color: var(--text); border: 1px solid var(--border);
-      border-radius: 8px; padding: 6px 10px;
+
+    tbody tr:hover {
+      background: #2d3748;
     }
-    .dt-paging .dt-paging-button {
-      background: #121622; color: var(--text); border: 1px solid var(--border);
-      padding: 6px 10px; margin: 0 2px; border-radius: 6px;
+
+    .sort-asc::after {
+      content: " ▲";
+      font-size: 0.8em;
     }
-    .dt-paging .dt-paging-button.current {
-      background: var(--accent); border-color: var(--accent); color: #041423;
+    .sort-desc::after {
+      content: " ▼";
+      font-size: 0.8em;
+    }
+
+    .table-container {
+      max-height: 80vh;
+      overflow-y: auto;
+      border: 1px solid #333;
+      border-radius: 6px;
     }
   </style>
-
-  <!-- Chart.js -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-
-  <!-- DataTables (v2) -->
-  <link rel="stylesheet" href="https://cdn.datatables.net/2.0.8/css/dataTables.dataTables.min.css">
-  <script src="https://cdn.datatables.net/2.0.8/js/dataTables.min.js"></script>
 </head>
 <body>
-  <h1>🏃‍♂️ Daily Activity Overview</h1>
-  <p class="subtle">“Total kcal” = Active kcal + 1745 (fixed baseline)</p>
+  <h1>Activity Dashboard</h1>
 
-  <div class="card">
-    <canvas id="stepsChart"></canvas>
-  </div>
-
-  <div class="card">
-    <canvas id="kcalChart"></canvas>
-  </div>
-
-  <div class="card">
-    <table id="data" class="display table-dark" style="width:100%">
+  <div class="table-container">
+    <table id="activityTable">
       <thead>
         <tr>
-          <th>Date</th>
-          <th>Steps</th>
-          <th>Active kcal</th>
-          <th>Total kcal</th>
-          <th># Workouts</th>
-          <th>Minutes</th>
-          <th>Workout Names</th>
+          <th data-col="0">Date</th>
+          <th data-col="1">Steps</th>
+          <th data-col="2">Active kcal</th>
+          <th data-col="3">Total kcal</th>
+          <th data-col="4"># Workouts</th>
+          <th data-col="5">Minutes</th>
+          <th data-col="6">Workout Names</th>
         </tr>
       </thead>
-      <tbody></tbody>
+      <tbody id="activityBody">
+        <!-- rows will be filled by script -->
+      </tbody>
     </table>
   </div>
 
-<script>
-async function getData(){
-  const res = await fetch('/api/daily', { credentials: 'same-origin' });
-  const data = await res.json();
-  return data;
-}
+  <script>
+    async function fetchData() {
+      const res = await fetch("/data");
+      const data = await res.json();
+      const body = document.getElementById("activityBody");
+      body.innerHTML = "";
 
-function ddmmyyyy(iso){
-  const [y,m,d] = iso.split('-');
-  return `${d}-${m}-${y}`;
-}
-
-(async () => {
-  const data = await getData();
-
-  // --- Charts ---
-  const labels = data.map(r => ddmmyyyy(r.date));
-
-  // Steps line with a soft gradient
-  const stepsCtx = document.getElementById('stepsChart').getContext('2d');
-  const grad = stepsCtx.createLinearGradient(0, 0, 0, 300);
-  grad.addColorStop(0, 'rgba(90,166,255,0.35)');
-  grad.addColorStop(1, 'rgba(90,166,255,0.02)');
-
-  new Chart(stepsCtx, {
-    type: 'line',
-    data: {
-      labels,
-      datasets: [{
-        label: 'Steps',
-        data: data.map(r => r.steps || 0),
-        borderColor: '#5aa6ff',
-        backgroundColor: grad,
-        pointRadius: 0,
-        borderWidth: 2,
-        tension: 0.3,
-        fill: true
-      }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { labels: { color: '#eaeef7' } },
-        title: { display: true, text: 'Daily Steps', color: '#eaeef7' },
-        tooltip: { mode: 'index', intersect: false }
-      },
-      scales: {
-        x: { ticks: { color: '#a6b1c2' }, grid: { color: 'rgba(255,255,255,0.05)' } },
-        y: { ticks: { color: '#a6b1c2' }, grid: { color: 'rgba(255,255,255,0.05)' } }
-      }
+      data.forEach(day => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${day.date}</td>
+          <td>${day.steps}</td>
+          <td>${day.activeKcal}</td>
+          <td>${day.totalKcal}</td>
+          <td>${day.workoutCount}</td>
+          <td>${day.workoutMinutes.toFixed(1)}</td>
+          <td>${(day.workoutNames || []).join(", ")}</td>
+        `;
+        body.appendChild(tr);
+      });
     }
-  });
 
-  // kcal bars (Active + Total)
-  const kcalCtx = document.getElementById('kcalChart').getContext('2d');
-  new Chart(kcalCtx, {
-    type: 'bar',
-    data: {
-      labels,
-      datasets: [
-        { label: 'Active kcal', data: data.map(r => r.activeKcal || 0), backgroundColor: '#4ac7a5' },
-        { label: 'Total kcal',  data: data.map(r => r.totalKcal  || 0), backgroundColor: '#ff7b72' }
-      ]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { labels: { color: '#eaeef7' } },
-        title: { display: true, text: 'Daily kcal (Active vs Total)', color: '#eaeef7' },
-        tooltip: { mode: 'index', intersect: false }
-      },
-      scales: {
-        x: { stacked: false, ticks: { color: '#a6b1c2' }, grid: { color: 'rgba(255,255,255,0.05)' } },
-        y: { stacked: false, ticks: { color: '#a6b1c2' }, grid: { color: 'rgba(255,255,255,0.05)' } }
-      }
-    }
-  });
+    // Sorting logic
+    const table = document.getElementById("activityTable");
+    const headers = table.querySelectorAll("th");
+    let sortState = {};
 
-  // --- Table (sortable/searchable via DataTables) ---
-  // Build rows with proper date sorting using data-order = ISO date
-  const tbody = document.querySelector('#data tbody');
-  tbody.innerHTML = data.map(r => `
-    <tr>
-      <td data-order="${r.date}">${ddmmyyyy(r.date)}</td>
-      <td>${r.steps ?? 0}</td>
-      <td>${(r.activeKcal ?? 0).toFixed(0)}</td>
-      <td>${(r.totalKcal  ?? 0).toFixed(0)}</td>
-      <td>${r.workoutCount ?? 0}</td>
-      <td>${(r.workoutMinutes ?? 0).toFixed(1)}</td>
-      <td>${(r.workoutNames ?? []).join(', ')}</td>
-    </tr>
-  `).join('');
+    headers.forEach(header => {
+      header.addEventListener("click", () => {
+        const col = header.dataset.col;
+        const tbody = table.querySelector("tbody");
+        const rows = Array.from(tbody.querySelectorAll("tr"));
+        const isNumeric = !isNaN(rows[0].children[col].innerText.trim());
 
-  // Initialize DataTables
-  new DataTable('#data', {
-    order: [[0, 'desc']],     // sort by Date (using data-order ISO) newest first
-    pageLength: 25,
-    lengthMenu: [10, 25, 50, 100],
-    layout: {
-      topStart: 'search',
-      topEnd: 'pageLength',
-      bottomStart: 'info',
-      bottomEnd: 'paging'
-    }
-  });
-})();
-</script>
+        const currentState = sortState[col] || "desc";
+        const newState = currentState === "asc" ? "desc" : "asc";
+        sortState = {}; // reset others
+        sortState[col] = newState;
+
+        headers.forEach(h => h.classList.remove("sort-asc", "sort-desc"));
+        header.classList.add(newState === "asc" ? "sort-asc" : "sort-desc");
+
+        rows.sort((a, b) => {
+          let A = a.children[col].innerText.trim();
+          let B = b.children[col].innerText.trim();
+
+          if (isNumeric) {
+            A = parseFloat(A) || 0;
+            B = parseFloat(B) || 0;
+          }
+
+          if (newState === "asc") {
+            return A > B ? 1 : A < B ? -1 : 0;
+          } else {
+            return A < B ? 1 : A > B ? -1 : 0;
+          }
+        });
+
+        tbody.innerHTML = "";
+        rows.forEach(r => tbody.appendChild(r));
+      });
+    });
+
+    fetchData();
+  </script>
 </body>
 </html>
