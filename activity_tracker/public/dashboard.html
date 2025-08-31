@@ -104,9 +104,11 @@ function ddmmyyyy(iso){ const [y,m,d]=iso.split('-'); return `${d}-${m}-${y}`; }
   }
 
   const data = await getData();
+  // Show newest dates first across charts and table
+  const sorted = [...data].sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
   /* -------- Charts -------- */
-  const labels = data.map(r => ddmmyyyy(r.date));
+  const labels = sorted.map(r => ddmmyyyy(r.date));
 
   const stepsCtx = document.getElementById('stepsChart').getContext('2d');
   const grad = stepsCtx.createLinearGradient(0,0,0,300);
@@ -114,7 +116,7 @@ function ddmmyyyy(iso){ const [y,m,d]=iso.split('-'); return `${d}-${m}-${y}`; }
   new Chart(stepsCtx,{
     type:'line',
     data:{ labels, datasets:[{
-      label:'Steps', data:data.map(r=>r.steps||0), borderColor:'#5aa6ff',
+      label:'Steps', data:sorted.map(r=>r.steps||0), borderColor:'#5aa6ff',
       backgroundColor:grad, pointRadius:0, borderWidth:2, tension:0.3, fill:true
     }]},
     options:{
@@ -130,8 +132,8 @@ function ddmmyyyy(iso){ const [y,m,d]=iso.split('-'); return `${d}-${m}-${y}`; }
     type:'bar',
     data:{ labels,
       datasets:[
-        { label:'Active kcal', data:data.map(r=>r.activeKcal||0), backgroundColor:'#4ac7a5' },
-        { label:'Total kcal',  data:data.map(r=>r.totalKcal ||0), backgroundColor:'#ff7b72' }
+        { label:'Active kcal', data:sorted.map(r=>r.activeKcal||0), backgroundColor:'#4ac7a5' },
+        { label:'Total kcal',  data:sorted.map(r=>r.totalKcal ||0), backgroundColor:'#ff7b72' }
       ]},
     options:{
       responsive:true, maintainAspectRatio:false,
@@ -143,7 +145,7 @@ function ddmmyyyy(iso){ const [y,m,d]=iso.split('-'); return `${d}-${m}-${y}`; }
 
   /* -------- Table -------- */
   const tbody = document.querySelector('#data tbody');
-  tbody.innerHTML = data.map(r => `
+  tbody.innerHTML = sorted.map(r => `
     <tr>
       <!-- use data-order with ISO date so sorting works by real date -->
       <td data-order="${r.date}">${ddmmyyyy(r.date)}</td>
