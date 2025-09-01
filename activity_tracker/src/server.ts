@@ -17,6 +17,102 @@ type DayStats = {
   workoutNames: string[];
 };
 
+// File logging removed (no longer needed)
+
+// Debug payload logging removed
+
+// (temporary file logging removed)
+
+// Aggregate step samples (possibly many per day) into daily totals
+function aggregateStepTotals(list: any[]): Map<string, number> {
+  const m = new Map<string, number>();
+  (list || []).forEach((r: any) => {
+    const d = ((r?.date as string) || '').split(' ')[0];
+    if (!d) return;
+    const n = Number(r?.qty);
+    if (!Number.isFinite(n)) return;
+    const qty = Math.round(n);
+    m.set(d, (m.get(d) || 0) + qty);
+  });
+  return m;
+}
+
+// Aggregate active energy samples per date (converted to kcal)
+function aggregateEnergyTotals(list: any[], units?: string): Map<string, number> {
+  const m = new Map<string, number>();
+  (list || []).forEach((r: any) => {
+    const d = ((r?.date as string) || '').split(' ')[0];
+    if (!d) return;
+    const q = Number(r?.qty);
+    if (!Number.isFinite(q)) return;
+    const kcal = kJtoKcal(q, units);
+    m.set(d, (m.get(d) || 0) + kcal);
+  });
+  return m;
+}
+
+// Aggregate exercise time samples per date to minutes
+function aggregateExerciseMinutes(list: any[], units?: string): Map<string, number> {
+  const m = new Map<string, number>();
+  (list || []).forEach((r: any) => {
+    const d = ((r?.date as string) || '').split(' ')[0];
+    if (!d) return;
+    const q = Number(r?.qty);
+    if (!Number.isFinite(q)) return;
+    let mins = q;
+    const u = (units || r?.units || '').toString().toLowerCase();
+    if (u === 's' || u === 'sec' || u === 'second' || u === 'seconds') mins = q / 60;
+    if (u === 'ms' || u === 'millisecond' || u === 'milliseconds') mins = q / 60000;
+    // if units are 'min' or 'minutes', keep as-is
+    m.set(d, (m.get(d) || 0) + mins);
+  });
+  return m;
+}
+
+// Aggregate workouts into per-day totals and de-dupe by workout id
+function aggregateWorkoutsByDate(workouts: any[]) {
+  type Acc = { minutes: number; count: number; names: Set<string>; kcal: number; ids: Set<string> };
+  const map = new Map<string, Acc>();
+  (workouts || []).forEach((w: any) => {
+    const d = ((w?.start as string) || '').split(' ')[0];
+    if (!d) return;
+    let acc = map.get(d);
+    if (!acc) {
+      acc = { minutes: 0, count: 0, names: new Set<string>(), kcal: 0, ids: new Set<string>() };
+      map.set(d, acc);
+    }
+    const id = String(w?.id || `${w?.start}-${w?.name || ''}`);
+    if (acc.ids.has(id)) return; // skip duplicates within same payload
+    acc.ids.add(id);
+
+    // minutes
+    let mins = 0;
+    if (typeof w?.duration === 'number' && isFinite(w.duration)) mins = w.duration / 60;
+    else if (w?.start && w?.end) {
+      const t0 = Date.parse(w.start);
+      const t1 = Date.parse(w.end);
+      if (isFinite(t0) && isFinite(t1) && t1 > t0) mins = (t1 - t0) / 60000;
+    }
+    acc.minutes += mins;
+
+    // kcal
+    if (w?.activeEnergyBurned && typeof w.activeEnergyBurned.qty === 'number') {
+      acc.kcal += kJtoKcal(w.activeEnergyBurned.qty, w.activeEnergyBurned.units);
+    } else if (Array.isArray(w?.activeEnergy)) {
+      acc.kcal += (w.activeEnergy || []).reduce((s: number, r: any) => {
+        const q = Number(r?.qty);
+        if (!Number.isFinite(q)) return s;
+        return s + kJtoKcal(q, r?.units);
+      }, 0);
+    }
+
+    // count + names
+    acc.count += 1;
+    if (w?.name) acc.names.add(String(w.name));
+  });
+  return map;
+}
+
 const ROOT = process.cwd();
 const PUBLIC_DIR = path.resolve(ROOT, 'public');
 const DB_FILE = path.resolve(ROOT, 'activity_data.sqlite');
@@ -84,6 +180,16 @@ function isActiveEnergy(name?: string) {
     'active_energy',
     'activeEnergyBurned',
     'HKQuantityTypeIdentifierActiveEnergyBurned',
+  ].includes(n);
+}
+
+function isExerciseMinutes(name?: string) {
+  const n = (name || '').trim();
+  return [
+    'apple_exercise_time',
+    'exercise_time',
+    'exerciseTime',
+    'HKQuantityTypeIdentifierAppleExerciseTime',
   ].includes(n);
 }
 
@@ -186,7 +292,8 @@ function weekBounds(today = new Date()) {
       workoutMinutes: 0,
       workoutNames: [],
     };
-    prev.activeKcal += kJtoKcal(qty, units);
+    // Set, don't add — idempotent per-day total (rounded like Move ring)
+    prev.activeKcal = Math.round(kJtoKcal(qty, units));
     prev.totalKcal = prev.activeKcal + 1745;
     dayMap.set(d, prev);
     saveDay(d, prev);
@@ -194,34 +301,15 @@ function weekBounds(today = new Date()) {
 
   function upsertWorkout(w: any) {
     const d = (w.start || '').split(' ')[0] || 'unknown';
-    const mins = (w.duration || 0) / 60;
-    const kcal = w.activeEnergyBurned ? kJtoKcal(w.activeEnergyBurned.qty, w.activeEnergyBurned.units) : 0;
-
     const prev = dayMap.get(d) || {
       date: d, steps: 0, activeKcal: 0, totalKcal: 0,
       workoutCount: 0, workoutMinutes: 0, workoutNames: [],
     };
-
     prev.workoutCount += 1;
-    prev.workoutMinutes += mins;
-    prev.activeKcal += kcal;
-
-    // Add steps only if workout includes steps AND is a walking/running type
-    if (
-      w.steps &&
-      (w.name === 'Outdoor Walk' ||
-       w.name === 'Indoor Walk' ||
-       w.name === 'Running')
-    ) {
-      prev.steps += w.steps;
-    }
-
-    prev.totalKcal = prev.activeKcal + 1745;
-
     if (w.name) {
       prev.workoutNames = [...new Set([...(prev.workoutNames || []), w.name])];
     }
-
+    prev.totalKcal = prev.activeKcal + 1745;
     dayMap.set(d, prev);
     saveDay(d, prev);
   }
@@ -253,18 +341,61 @@ function weekBounds(today = new Date()) {
     const metrics: any[] = payload.metrics || [];
     const workouts: any[] = payload.workouts || [];
 
+    // Track which dates explicitly provide exercise minutes metric in this payload
+    const exerciseDates = new Set<string>();
+
     metrics.forEach((m: any) => {
       const { name, identifier, units, data = [] } = m || {};
       const key = identifier || name;
       if (isSteps(key)) {
-        data.forEach((r: any) => upsertSteps((r.date || '').split(' ')[0], Math.round(r.qty || 0)));
+        // Sum all samples per date, then set daily total once
+        const totals = aggregateStepTotals(data);
+        totals.forEach((total, d) => upsertSteps(d, total));
       }
       if (isActiveEnergy(key)) {
-        data.forEach((r: any) => upsertActiveKcal((r.date || '').split(' ')[0], r.qty || 0, units));
+        const energy = aggregateEnergyTotals(data, units);
+        energy.forEach((totalKcal, d) => upsertActiveKcal(d, totalKcal, 'kcal'));
+      }
+      if (isExerciseMinutes(key)) {
+        const mins = aggregateExerciseMinutes(data, units);
+        mins.forEach((minutes, d) => {
+          exerciseDates.add(d);
+          const prev = dayMap.get(d) || {
+            date: d,
+            steps: 0,
+            activeKcal: 0,
+            totalKcal: 0,
+            workoutCount: 0,
+            workoutMinutes: 0,
+            workoutNames: [],
+          };
+          prev.workoutMinutes = Math.round(minutes);
+          prev.totalKcal = prev.activeKcal + 1745;
+          dayMap.set(d, prev);
+          saveDay(d, prev);
+        });
       }
     });
 
-    workouts.forEach((w: any) => upsertWorkout(w));
+    // Aggregate workouts per day (names + count only; no minutes/kcal from workouts)
+    const byDate = aggregateWorkoutsByDate(workouts);
+    byDate.forEach((acc, d) => {
+      const prev = dayMap.get(d) || {
+        date: d,
+        steps: 0,
+        activeKcal: 0,
+        totalKcal: 0,
+        workoutCount: 0,
+        workoutMinutes: 0,
+        workoutNames: [],
+      };
+      prev.workoutCount = acc.count;
+      // Do not set minutes or activeKcal from workouts
+      prev.totalKcal = prev.activeKcal + 1745;
+      prev.workoutNames = Array.from(new Set([...(prev.workoutNames || []), ...acc.names]));
+      dayMap.set(d, prev);
+      saveDay(d, prev);
+    });
     res.sendStatus(200);
   });
 
@@ -272,14 +403,31 @@ function weekBounds(today = new Date()) {
     (req.body?.data?.metrics || []).forEach((m: any) => {
       const key = m.identifier || m.name;
       if (isSteps(key)) {
-        (m.data || []).forEach((r: any) =>
-          upsertSteps((r.date || '').split(' ')[0], Math.round(r.qty || 0))
-        );
+        // Sum all samples per date, then set daily total once
+        const totals = aggregateStepTotals(m.data || []);
+        totals.forEach((total, d) => upsertSteps(d, total));
       }
       if (isActiveEnergy(key)) {
-        (m.data || []).forEach((r: any) =>
-          upsertActiveKcal((r.date || '').split(' ')[0], r.qty || 0, m.units)
-        );
+        const energy = aggregateEnergyTotals(m.data || [], m.units);
+        energy.forEach((totalKcal, d) => upsertActiveKcal(d, totalKcal, 'kcal'));
+      }
+      if (isExerciseMinutes(key)) {
+        const mins = aggregateExerciseMinutes(m.data || [], m.units);
+        mins.forEach((minutes, d) => {
+          const prev = dayMap.get(d) || {
+            date: d,
+            steps: 0,
+            activeKcal: 0,
+            totalKcal: 0,
+            workoutCount: 0,
+            workoutMinutes: 0,
+            workoutNames: [],
+          };
+          prev.workoutMinutes = Math.round(minutes);
+          prev.totalKcal = prev.activeKcal + 1745;
+          dayMap.set(d, prev);
+          saveDay(d, prev);
+        });
       }
     });
     res.sendStatus(200);
@@ -288,7 +436,24 @@ function weekBounds(today = new Date()) {
   app.post('/workouts', basicAuth, (req, res) => {
     const list = req.body?.data?.workouts;
     if (!Array.isArray(list)) return res.status(400).send('Invalid workout payload');
-    list.forEach(upsertWorkout);
+    const byDate = aggregateWorkoutsByDate(list);
+    byDate.forEach((acc, d) => {
+      const prev = dayMap.get(d) || {
+        date: d,
+        steps: 0,
+        activeKcal: 0,
+        totalKcal: 0,
+        workoutCount: 0,
+        workoutMinutes: 0,
+        workoutNames: [],
+      };
+      prev.workoutCount = acc.count;
+      // Do not set minutes or activeKcal from workouts
+      prev.totalKcal = prev.activeKcal + 1745;
+      prev.workoutNames = Array.from(new Set([...(prev.workoutNames || []), ...acc.names]));
+      dayMap.set(d, prev);
+      saveDay(d, prev);
+    });
     res.sendStatus(200);
   });
 
