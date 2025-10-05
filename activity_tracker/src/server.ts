@@ -439,6 +439,54 @@ function weekBounds(today = new Date(), offsetWeeks = 0) {
     res.sendStatus(200);
   });
 
+  // CORS-enabled compact summary (remains public for the external site)
+  app.options('/public/steps', (_req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.sendStatus(204);
+  });
+
+  app.get('/public/steps', (_req, res) => {
+    try {
+      res.setHeader('Access-Control-Allow-Origin', '*');
+
+      const today = isoLocal(new Date());
+      const currentWeek = weekBounds(new Date());
+      const previousWeek = weekBounds(new Date(), -1);
+
+      const todayRes = db.exec(
+        `SELECT COALESCE(steps,0) FROM day_stats WHERE date='${today}' LIMIT 1;`
+      );
+      const curWeekRes = db.exec(
+        `SELECT COALESCE(SUM(steps),0) FROM day_stats WHERE date >= '${currentWeek.start}' AND date <= '${currentWeek.end}';`
+      );
+      const prevWeekRes = db.exec(
+        `SELECT COALESCE(SUM(steps),0) FROM day_stats WHERE date >= '${previousWeek.start}' AND date <= '${previousWeek.end}';`
+      );
+
+      const todaySteps =
+        todayRes.length && todayRes[0].values.length ? Number(todayRes[0].values[0][0] || 0) : 0;
+      const currentSteps =
+        curWeekRes.length && curWeekRes[0].values.length ? Number(curWeekRes[0].values[0][0] || 0) : 0;
+      const previousSteps =
+        prevWeekRes.length && prevWeekRes[0].values.length ? Number(prevWeekRes[0].values[0][0] || 0) : 0;
+
+      const thisWeek = { ...currentWeek, steps: currentSteps };
+      const lastWeek = { ...previousWeek, steps: previousSteps };
+
+      res.json({
+        today: { date: today, steps: todaySteps },
+        thisWeek,
+        lastWeek,
+        week: thisWeek,
+      });
+    } catch (e) {
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.status(500).json({ error: 'failed', message: String(e) });
+    }
+  });
+
   // ---------------- READ (protected) ----------------
   // Require basic auth for dashboard content and read APIs
   app.use(basicAuth);
@@ -483,54 +531,6 @@ function weekBounds(today = new Date(), offsetWeeks = 0) {
 
       res.json({ thisWeek, lastWeek, week: thisWeek });
     } catch (e) {
-      res.status(500).json({ error: 'failed', message: String(e) });
-    }
-  });
-
-  // CORS-enabled compact summary (requires basic auth like other reads)
-  app.options('/public/steps', (_req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    res.sendStatus(204);
-  });
-
-  app.get('/public/steps', (_req, res) => {
-    try {
-      res.setHeader('Access-Control-Allow-Origin', '*');
-
-      const today = isoLocal(new Date());
-      const currentWeek = weekBounds(new Date());
-      const previousWeek = weekBounds(new Date(), -1);
-
-      const todayRes = db.exec(
-        `SELECT COALESCE(steps,0) FROM day_stats WHERE date='${today}' LIMIT 1;`
-      );
-      const curWeekRes = db.exec(
-        `SELECT COALESCE(SUM(steps),0) FROM day_stats WHERE date >= '${currentWeek.start}' AND date <= '${currentWeek.end}';`
-      );
-      const prevWeekRes = db.exec(
-        `SELECT COALESCE(SUM(steps),0) FROM day_stats WHERE date >= '${previousWeek.start}' AND date <= '${previousWeek.end}';`
-      );
-
-      const todaySteps =
-        todayRes.length && todayRes[0].values.length ? Number(todayRes[0].values[0][0] || 0) : 0;
-      const currentSteps =
-        curWeekRes.length && curWeekRes[0].values.length ? Number(curWeekRes[0].values[0][0] || 0) : 0;
-      const previousSteps =
-        prevWeekRes.length && prevWeekRes[0].values.length ? Number(prevWeekRes[0].values[0][0] || 0) : 0;
-
-      const thisWeek = { ...currentWeek, steps: currentSteps };
-      const lastWeek = { ...previousWeek, steps: previousSteps };
-
-      res.json({
-        today: { date: today, steps: todaySteps },
-        thisWeek,
-        lastWeek,
-        week: thisWeek,
-      });
-    } catch (e) {
-      res.setHeader('Access-Control-Allow-Origin', '*');
       res.status(500).json({ error: 'failed', message: String(e) });
     }
   });
