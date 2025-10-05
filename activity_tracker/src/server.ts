@@ -181,11 +181,13 @@ function isoLocal(d: Date) {
   const day = d.getDate().toString().padStart(2, '0');
   return `${y}-${m}-${day}`;
 }
-function weekBounds(today = new Date()) {
-  const dow = today.getDay();
-  const deltaToMon = (dow === 0 ? -6 : 1 - dow);
-  const start = new Date(today);
-  start.setHours(0,0,0,0);
+function weekBounds(today = new Date(), offsetWeeks = 0) {
+  const reference = new Date(today);
+  if (offsetWeeks) reference.setDate(reference.getDate() + offsetWeeks * 7);
+  const dow = reference.getDay();
+  const deltaToMon = dow === 0 ? -6 : 1 - dow;
+  const start = new Date(reference);
+  start.setHours(0, 0, 0, 0);
   start.setDate(start.getDate() + deltaToMon);
   const end = new Date(start);
   end.setDate(start.getDate() + 6);
@@ -461,10 +463,25 @@ function weekBounds(today = new Date()) {
 
   app.get('/api/steps/week', (_req, res) => {
     try {
-      const { start, end } = weekBounds(new Date());
-      const r = db.exec(`SELECT COALESCE(SUM(steps),0) AS total FROM day_stats WHERE date >= '${start}' AND date <= '${end}';`);
-      const steps = r.length && r[0].values.length ? Number(r[0].values[0][0] || 0) : 0;
-      res.json({ start, end, steps });
+      const currentWeek = weekBounds(new Date());
+      const previousWeek = weekBounds(new Date(), -1);
+
+      const curWeekRes = db.exec(
+        `SELECT COALESCE(SUM(steps),0) AS total FROM day_stats WHERE date >= '${currentWeek.start}' AND date <= '${currentWeek.end}';`
+      );
+      const prevWeekRes = db.exec(
+        `SELECT COALESCE(SUM(steps),0) AS total FROM day_stats WHERE date >= '${previousWeek.start}' AND date <= '${previousWeek.end}';`
+      );
+
+      const currentSteps =
+        curWeekRes.length && curWeekRes[0].values.length ? Number(curWeekRes[0].values[0][0] || 0) : 0;
+      const previousSteps =
+        prevWeekRes.length && prevWeekRes[0].values.length ? Number(prevWeekRes[0].values[0][0] || 0) : 0;
+
+      const thisWeek = { ...currentWeek, steps: currentSteps };
+      const lastWeek = { ...previousWeek, steps: previousSteps };
+
+      res.json({ thisWeek, lastWeek, week: thisWeek });
     } catch (e) {
       res.status(500).json({ error: 'failed', message: String(e) });
     }
@@ -483,23 +500,34 @@ function weekBounds(today = new Date()) {
       res.setHeader('Access-Control-Allow-Origin', '*');
 
       const today = isoLocal(new Date());
-      const { start, end } = weekBounds(new Date());
+      const currentWeek = weekBounds(new Date());
+      const previousWeek = weekBounds(new Date(), -1);
 
-      const r1 = db.exec(
+      const todayRes = db.exec(
         `SELECT COALESCE(steps,0) FROM day_stats WHERE date='${today}' LIMIT 1;`
       );
-      const todaySteps =
-        r1.length && r1[0].values.length ? Number(r1[0].values[0][0] || 0) : 0;
-
-      const r2 = db.exec(
-        `SELECT COALESCE(SUM(steps),0) FROM day_stats WHERE date >= '${start}' AND date <= '${end}';`
+      const curWeekRes = db.exec(
+        `SELECT COALESCE(SUM(steps),0) FROM day_stats WHERE date >= '${currentWeek.start}' AND date <= '${currentWeek.end}';`
       );
-      const weekSteps =
-        r2.length && r2[0].values.length ? Number(r2[0].values[0][0] || 0) : 0;
+      const prevWeekRes = db.exec(
+        `SELECT COALESCE(SUM(steps),0) FROM day_stats WHERE date >= '${previousWeek.start}' AND date <= '${previousWeek.end}';`
+      );
+
+      const todaySteps =
+        todayRes.length && todayRes[0].values.length ? Number(todayRes[0].values[0][0] || 0) : 0;
+      const currentSteps =
+        curWeekRes.length && curWeekRes[0].values.length ? Number(curWeekRes[0].values[0][0] || 0) : 0;
+      const previousSteps =
+        prevWeekRes.length && prevWeekRes[0].values.length ? Number(prevWeekRes[0].values[0][0] || 0) : 0;
+
+      const thisWeek = { ...currentWeek, steps: currentSteps };
+      const lastWeek = { ...previousWeek, steps: previousSteps };
 
       res.json({
         today: { date: today, steps: todaySteps },
-        week: { start, end, steps: weekSteps },
+        thisWeek,
+        lastWeek,
+        week: thisWeek,
       });
     } catch (e) {
       res.setHeader('Access-Control-Allow-Origin', '*');

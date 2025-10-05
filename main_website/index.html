@@ -38,14 +38,14 @@
         </div>
         <div class="hero-card">
           <div class="stat">
-            <div class="stat-label">Today</div>
-            <div class="stat-value" id="stat-steps-today">—</div>
-            <div class="stat-sub">steps</div>
+            <div class="stat-label">This week</div>
+            <div class="stat-value" id="stat-steps-this-week">—</div>
+            <div class="stat-sub">Mon → Sun</div>
           </div>
           <div class="stat">
-            <div class="stat-label">This week</div>
-            <div class="stat-value" id="stat-steps-week">—</div>
-            <div class="stat-sub">Mon → Sun</div>
+            <div class="stat-label">Last week</div>
+            <div class="stat-value" id="stat-steps-last-week">—</div>
+            <div class="stat-sub">Prev Mon → Sun</div>
           </div>
           <a class="mini-link" href="https://activity.tesseract.sbs" target="_blank" rel="noopener">Live stats →</a>
         </div>
@@ -95,8 +95,10 @@
         if (!res.ok) return;
         const d = await res.json();
         const n = (x) => Number(x || 0).toLocaleString();
-        document.getElementById('stat-steps-today').textContent = n(d?.today?.steps);
-        document.getElementById('stat-steps-week').textContent  = n(d?.week?.steps);
+        const thisWeekEl = document.getElementById('stat-steps-this-week');
+        if (thisWeekEl) thisWeekEl.textContent = n(d?.thisWeek?.steps ?? d?.week?.steps);
+        const lastWeekEl = document.getElementById('stat-steps-last-week');
+        if (lastWeekEl) lastWeekEl.textContent = n(d?.lastWeek?.steps);
       } catch (_) {}
     })();
   </script>
