@@ -2,6 +2,7 @@
   "name": "activity-tracker",
   "version": "1.0.0",
   "scripts": {
+    "predev": "start powershell -NoExit -Command \"cloudflared tunnel run activity-tracking\"",
     "dev": "nodemon --watch src --ext ts --exec \"ts-node src/server.ts\"",
     "start": "ts-node src/server.ts",
     "build": "tsc"

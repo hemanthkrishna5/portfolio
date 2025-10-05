@@ -3,7 +3,6 @@ import express, { Request, Response, NextFunction } from 'express';
 import initSqlJs from 'sql.js';
 import fs from 'fs';
 import path from 'path';
-import http from 'http';
 import * as dotenv from 'dotenv';
 dotenv.config();
 
@@ -117,39 +116,21 @@ const ROOT = process.cwd();
 const PUBLIC_DIR = path.resolve(ROOT, 'public');
 const DB_FILE = path.resolve(ROOT, 'activity_data.sqlite');
 const PORT = Number(process.env.PORT || 4000);
-const BASIC_USER = process.env.BASIC_USER || 'user';
-let BASIC_PASSWORD = process.env.BASIC_PASSWORD || '';
+const BASIC_USER = process.env.BASIC_USER || 'hemanth';
+let BASIC_PASSWORD = process.env.BASIC_PASSWORD || 'anisha334';
 
-async function fetchPublicIP(): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const req = http.request(
-      { host: 'api.ipify.org', path: '/', method: 'GET' },
-      (res) => {
-        let data = '';
-        res.on('data', (c) => (data += c));
-        res.on('end', () => resolve(data.trim()));
-      }
-    );
-    req.on('error', reject);
-    req.end();
-  });
-}
-
-async function resolvePassword() {
+function resolvePassword() {
   if (process.env.BASIC_PASSWORD && process.env.BASIC_PASSWORD.length > 0) {
     BASIC_PASSWORD = process.env.BASIC_PASSWORD;
     console.log('🔒 Basic-Auth password (from env).');
   } else {
-    try {
-      BASIC_PASSWORD = await fetchPublicIP();
-      console.log('🔒 Basic-Auth password (your public IP):', BASIC_PASSWORD);
-    } catch {
-      console.warn('⚠️ Could not fetch public IP; BASIC_PASSWORD is empty. Set BASIC_PASSWORD env.');
-    }
+    BASIC_PASSWORD = 'anisha334';
+    console.log('🔒 Basic-Auth password (default).');
   }
 }
 
 function basicAuth(req: Request, res: Response, next: NextFunction) {
+  if (req.method === 'OPTIONS') return next();
   const header = req.headers.authorization || '';
   const expected = 'Basic ' + Buffer.from(`${BASIC_USER}:${BASIC_PASSWORD}`).toString('base64');
   if (header === expected) return next();
@@ -212,8 +193,7 @@ function weekBounds(today = new Date()) {
 }
 
 (async function main() {
-  await resolvePassword();
-  if (!process.env.BASIC_PASSWORD) setInterval(resolvePassword, 6 * 60 * 60 * 1000);
+  resolvePassword();
 
   const db: any = await loadDb();
   db.run(`
@@ -457,8 +437,9 @@ function weekBounds(today = new Date()) {
     res.sendStatus(200);
   });
 
-  // ---------------- READ (public) ----------------
-  // Make all read-only data public (no Basic Auth)
+  // ---------------- READ (protected) ----------------
+  // Require basic auth for dashboard content and read APIs
+  app.use(basicAuth);
 
   app.get('/api/daily', (_req, res) => {
     const data = [...dayMap.values()].sort(
@@ -489,7 +470,7 @@ function weekBounds(today = new Date()) {
     }
   });
 
-  // Public, CORS-enabled compact summary (for your Pages site)
+  // CORS-enabled compact summary (requires basic auth like other reads)
   app.options('/public/steps', (_req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -526,7 +507,7 @@ function weekBounds(today = new Date()) {
     }
   });
 
-  // -------- Static site: PUBLIC --------
+  // -------- Static site --------
   app.use('/', express.static(PUBLIC_DIR));
   app.get('/', (_req, res) => {
     res.sendFile(path.join(PUBLIC_DIR, 'dashboard.html'));
@@ -534,8 +515,8 @@ function weekBounds(today = new Date()) {
 
   const server = app.listen(PORT, () => {
     console.log(`Listening on http://localhost:${PORT}`);
-    console.log(`🔑 Basic auth user (for POSTs): ${BASIC_USER}`);
-    console.log(`🔑 Basic auth password (for POSTs): ${BASIC_PASSWORD || '(empty!)'}`);
+    console.log(`🔑 Basic auth user: ${BASIC_USER}`);
+    console.log(`🔑 Basic auth password: ${BASIC_PASSWORD || '(empty!)'}`);
   });
 
   // longer timeouts for large uploads
