@@ -1,0 +1,761 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { ChangeEvent } from 'react'
+
+const API_ENDPOINT = '/api/imu/latest'
+const TOTAL_SIDES = 12
+const POLL_INTERVAL_MS = 1000
+const LABEL_STORAGE_KEY = 'dodec-labels'
+const ACTIVITY_LOG_STORAGE_KEY = 'dodec-activity-log'
+const DEFAULT_LABEL_PREFIX = 'Side'
+const DAY_MS = 24 * 60 * 60 * 1000
+
+type RangeMode = 'week' | 'month' | 'custom'
+
+type ActivityLogMap = Record<string, Record<string, number>>
+
+interface LatestReadingResponse {
+  side: number | null
+  imu_timestamp_text?: string | null
+  imu_timestamp_iso?: string | null
+  received_at?: string | null
+  confidence?: boolean | null
+}
+
+interface LatestReadingState extends LatestReadingResponse {}
+
+interface TimelineState {
+  currentLabel: string | null
+  startTime: number | null
+  lastTimestamp: number | null
+  lastSide: number | null
+}
+
+interface EditingState {
+  dateKey: string
+  label: string
+}
+
+interface DateGroup {
+  dateKey: string
+  rows: Array<{ label: string; totalMs: number }>
+  totalMs: number
+}
+
+const sideNumbers = Array.from({ length: TOTAL_SIDES }, (_, index) => index + 1)
+
+const createEmptyLabels = (): Record<number, string> => {
+  const result: Record<number, string> = {}
+  for (const side of sideNumbers) {
+    result[side] = ''
+  }
+  return result
+}
+
+const resolveLabel = (labels: Record<number, string>, side: number): string => {
+  const entry = labels[side]?.trim()
+  return entry && entry.length > 0 ? entry : `${DEFAULT_LABEL_PREFIX} ${side}`
+}
+
+const parseTimestampMs = (payload: LatestReadingResponse): number => {
+  const candidates = [payload.received_at, payload.imu_timestamp_iso]
+  for (const value of candidates) {
+    if (value) {
+      const parsed = Date.parse(value)
+      if (!Number.isNaN(parsed)) {
+        return parsed
+      }
+    }
+  }
+
+  if (payload.imu_timestamp_text) {
+    const normalized = payload.imu_timestamp_text.replace(' ', 'T')
+    const parsed = Date.parse(normalized)
+    if (!Number.isNaN(parsed)) {
+      return parsed
+    }
+  }
+
+  return Date.now()
+}
+
+const toDateKey = (timestampMs: number): string => {
+  const date = new Date(timestampMs)
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+const parseDateKey = (dateKey: string): Date => {
+  const [year, month, day] = dateKey.split('-').map(Number)
+  return new Date(year, month - 1, day)
+}
+
+const getDateBounds = (dateKey: string): { start: number; end: number } => {
+  const base = parseDateKey(dateKey)
+  const start = new Date(base.getFullYear(), base.getMonth(), base.getDate()).getTime()
+  const end = start + DAY_MS
+  return { start, end }
+}
+
+const formatDateDisplay = (dateKey: string): string => {
+  const date = parseDateKey(dateKey)
+  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(date)
+}
+
+const formatTimestamp = (timestamp?: string | null): string => {
+  if (!timestamp) {
+    return 'Waiting for data?'
+  }
+  return timestamp.replace('T', ' ').replace(/\+.*$/, '')
+}
+
+const formatDuration = (ms: number): string => {
+  if (!Number.isFinite(ms) || ms <= 0) {
+    return '00:00'
+  }
+  const totalSeconds = Math.floor(ms / 1000)
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  if (hours > 0) {
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+  }
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+}
+
+const formatDurationForInput = (ms: number): string => formatDuration(ms)
+
+const parseDurationInput = (raw: string): number => {
+  const value = raw.trim()
+  if (!value) {
+    return NaN
+  }
+  const parts = value.split(':')
+  if (parts.length > 1) {
+    if (parts.length > 3) {
+      return NaN
+    }
+    const numeric = parts.map((part) => Number(part))
+    if (numeric.some((num) => Number.isNaN(num) || num < 0)) {
+      return NaN
+    }
+    let hours = 0
+    let minutes = 0
+    let seconds = 0
+    if (numeric.length === 3) {
+      ;[hours, minutes, seconds] = numeric
+    } else {
+      ;[minutes, seconds] = numeric
+    }
+    return Math.max(0, hours * 3600 + minutes * 60 + seconds) * 1000
+  }
+  const minutes = Number(value)
+  if (Number.isNaN(minutes) || minutes < 0) {
+    return NaN
+  }
+  return minutes * 60 * 1000
+}
+
+const escapeCsvField = (value: string): string => {
+  if (value.includes("\"") || value.includes(',') || value.includes('\n')) {
+    return `"${value.replace(/"/g, '""')}"`
+    return `"${value.replace(/"/g, '""')}"`
+  }
+  return value
+}
+
+export default function App() {
+  const [latest, setLatest] = useState<LatestReadingState | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [activityLog, setActivityLog] = useState<ActivityLogMap>(() => {
+    if (typeof window === 'undefined') {
+      return {}
+    }
+    try {
+      const stored = window.localStorage.getItem(ACTIVITY_LOG_STORAGE_KEY)
+      return stored ? (JSON.parse(stored) as ActivityLogMap) : {}
+    } catch (storageError) {
+      console.warn('Unable to read stored activity log', storageError)
+      return {}
+    }
+  })
+  const [editing, setEditing] = useState<EditingState | null>(null)
+  const [editingValue, setEditingValue] = useState<string>('')
+  const [editError, setEditError] = useState<string | null>(null)
+  const [expandedDates, setExpandedDates] = useState<string[]>(() => [toDateKey(Date.now())])
+  const [rangeMode, setRangeMode] = useState<RangeMode>('week')
+  const [customStart, setCustomStart] = useState<string>(toDateKey(Date.now()))
+  const [customEnd, setCustomEnd] = useState<string>(toDateKey(Date.now()))
+  const [downloadError, setDownloadError] = useState<string | null>(null)
+
+  const [labels, setLabels] = useState<Record<number, string>>(() => {
+    if (typeof window === 'undefined') {
+      return createEmptyLabels()
+    }
+    try {
+      const stored = window.localStorage.getItem(LABEL_STORAGE_KEY)
+      if (stored) {
+        const parsed = JSON.parse(stored) as Record<string, string>
+        const merged = createEmptyLabels()
+        for (const [side, value] of Object.entries(parsed)) {
+          const numericSide = Number(side)
+          if (Number.isFinite(numericSide) && numericSide >= 1 && numericSide <= TOTAL_SIDES) {
+            merged[numericSide] = String(value)
+          }
+        }
+        return merged
+      }
+    } catch (storageError) {
+      console.warn('Unable to read stored labels', storageError)
+    }
+    return createEmptyLabels()
+  })
+
+  const labelsRef = useRef(labels)
+  const timelineRef = useRef<TimelineState>({
+    currentLabel: null,
+    startTime: null,
+    lastTimestamp: null,
+    lastSide: null,
+  })
+
+  const addDurationToLog = useCallback((label: string, startMs: number, endMs: number) => {
+    if (endMs <= startMs) {
+      return
+    }
+    setActivityLog((prev) => {
+      const next: ActivityLogMap = { ...prev }
+      let cursor = startMs
+      while (cursor < endMs) {
+        const dateKey = toDateKey(cursor)
+        const { end } = getDateBounds(dateKey)
+        const chunkEnd = Math.min(endMs, end)
+        const duration = Math.max(0, chunkEnd - cursor)
+        if (duration > 0) {
+          const entry = { ...(next[dateKey] ?? {}) }
+          entry[label] = (entry[label] ?? 0) + duration
+          next[dateKey] = entry
+        }
+        cursor = chunkEnd
+      }
+      return next
+    })
+  }, [])
+
+  const handleReading = useCallback(
+    (payload: LatestReadingResponse) => {
+      const sideValue = typeof payload.side === 'number' ? payload.side : null
+      if (!sideValue) {
+        return
+      }
+
+      const label = resolveLabel(labelsRef.current, sideValue)
+      const timestampMs = parseTimestampMs(payload)
+      const state = timelineRef.current
+
+      if (state.currentLabel === null || state.startTime === null) {
+        state.currentLabel = label
+        state.startTime = timestampMs
+        state.lastTimestamp = timestampMs
+        state.lastSide = sideValue
+        return
+      }
+
+      if (label === state.currentLabel) {
+        state.lastTimestamp = timestampMs
+        state.lastSide = sideValue
+        return
+      }
+
+      const start = state.startTime
+      const end = timestampMs
+      if (end > start) {
+        addDurationToLog(state.currentLabel, start, end)
+      }
+
+      state.currentLabel = label
+      state.startTime = timestampMs
+      state.lastTimestamp = timestampMs
+      state.lastSide = sideValue
+    },
+    [addDurationToLog],
+  )
+
+  useEffect(() => {
+    labelsRef.current = labels
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(LABEL_STORAGE_KEY, JSON.stringify(labels))
+    }
+    const state = timelineRef.current
+    if (state.lastSide !== null) {
+      state.currentLabel = resolveLabel(labels, state.lastSide)
+    }
+  }, [labels])
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(ACTIVITY_LOG_STORAGE_KEY, JSON.stringify(activityLog))
+    }
+  }, [activityLog])
+
+  useEffect(() => {
+    let isMounted = true
+
+    const fetchLatest = async () => {
+      try {
+        const response = await fetch(API_ENDPOINT, { cache: 'no-store' })
+        if (!response.ok) {
+          throw new Error(`Request failed with status ${response.status}`)
+        }
+        const payload = (await response.json()) as LatestReadingResponse
+        if (!isMounted) {
+          return
+        }
+        handleReading(payload)
+        setLatest({
+          side: typeof payload.side === 'number' ? payload.side : null,
+          imu_timestamp_text: payload.imu_timestamp_text ?? null,
+          imu_timestamp_iso: payload.imu_timestamp_iso ?? null,
+          received_at: payload.received_at ?? null,
+          confidence: payload.confidence ?? null,
+        })
+        setError(null)
+      } catch (err) {
+        if (isMounted) {
+          setError(err instanceof Error ? err.message : 'Unknown error')
+        }
+      }
+    }
+
+    fetchLatest()
+    const intervalId = window.setInterval(fetchLatest, POLL_INTERVAL_MS)
+
+    return () => {
+      isMounted = false
+      window.clearInterval(intervalId)
+    }
+  }, [handleReading])
+
+  const activeState = timelineRef.current
+  const activeDateKey = activeState.lastTimestamp ? toDateKey(activeState.lastTimestamp) : toDateKey(Date.now())
+
+  useEffect(() => {
+    setExpandedDates((prev) => (prev.includes(activeDateKey) ? prev : [...prev, activeDateKey]))
+  }, [activeDateKey])
+
+  const handleLabelChange = useCallback(
+    (side: number) => (event: ChangeEvent<HTMLInputElement>) => {
+      const nextValue = event.target.value
+      setLabels((prev) => ({ ...prev, [side]: nextValue }))
+    },
+    [],
+  )
+
+  const getActiveContribution = (dateKey: string, label: string): number => {
+    const state = timelineRef.current
+    if (!state.currentLabel || state.currentLabel !== label) {
+      return 0
+    }
+    if (state.startTime === null || state.lastTimestamp === null) {
+      return 0
+    }
+    const { start, end } = getDateBounds(dateKey)
+    const overlapStart = Math.max(start, state.startTime)
+    const overlapEnd = Math.min(end, state.lastTimestamp)
+    return overlapEnd > overlapStart ? overlapEnd - overlapStart : 0
+  }
+
+  const getRowsForDate = useCallback(
+    (dateKey: string): Array<{ label: string; totalMs: number }> => {
+      const storedEntries = activityLog[dateKey] ?? {}
+      const rows = Object.entries(storedEntries).map(([label, totalMs]) => ({ label, totalMs }))
+      const state = timelineRef.current
+      if (state.currentLabel && state.startTime !== null && state.lastTimestamp !== null) {
+        const activeMs = getActiveContribution(dateKey, state.currentLabel)
+        if (activeMs > 0) {
+          const existing = rows.find((row) => row.label === state.currentLabel)
+          if (existing) {
+            existing.totalMs += activeMs
+          } else {
+            rows.push({ label: state.currentLabel, totalMs: activeMs })
+          }
+        }
+      }
+      return rows.sort((a, b) => b.totalMs - a.totalMs)
+    },
+    [activityLog, latest],
+  )
+
+  const sortedDates = useMemo(() => {
+    const keys = new Set(Object.keys(activityLog))
+    keys.add(activeDateKey)
+    return Array.from(keys).sort((a, b) => (a === b ? 0 : a > b ? -1 : 1))
+  }, [activityLog, activeDateKey])
+
+  const dateGroups: DateGroup[] = useMemo(() => {
+    return sortedDates
+      .map((dateKey) => {
+        const rows = getRowsForDate(dateKey)
+        if (rows.length === 0) {
+          return null
+        }
+        const totalMs = rows.reduce((sum, row) => sum + row.totalMs, 0)
+        return { dateKey, rows, totalMs }
+      })
+      .filter(Boolean) as DateGroup[]
+  }, [sortedDates, getRowsForDate])
+
+  const beginEdit = useCallback((dateKey: string, label: string, totalMs: number) => {
+    const state = timelineRef.current
+    const isLocked = state.currentLabel === label && dateKey === activeDateKey
+    if (isLocked) {
+      setEditError('Stop the current activity before editing it.')
+      return
+    }
+    setEditing({ dateKey, label })
+    setEditingValue(formatDurationForInput(totalMs))
+    setEditError(null)
+  }, [activeDateKey])
+
+  const handleEditChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
+    setEditingValue(event.target.value)
+  }, [])
+
+  const handleEditCancel = useCallback(() => {
+    setEditing(null)
+    setEditingValue('')
+    setEditError(null)
+  }, [])
+
+  const handleEditSave = useCallback(() => {
+    if (!editing) {
+      return
+    }
+    const { dateKey, label } = editing
+    const parsedMs = parseDurationInput(editingValue)
+    if (!Number.isFinite(parsedMs)) {
+      setEditError('Please enter duration as mm:ss, hh:mm:ss, or minutes.')
+      return
+    }
+    const activeContribution = getActiveContribution(dateKey, label)
+    if (parsedMs < activeContribution) {
+      setEditError(`Duration cannot be less than the active segment (${formatDuration(activeContribution)}).`)
+      return
+    }
+    const storedMs = Math.max(0, parsedMs - activeContribution)
+    setActivityLog((prev) => {
+      const next: ActivityLogMap = { ...prev }
+      const entry = { ...(next[dateKey] ?? {}) }
+      if (storedMs <= 0) {
+        delete entry[label]
+      } else {
+        entry[label] = storedMs
+      }
+      if (Object.keys(entry).length === 0) {
+        delete next[dateKey]
+      } else {
+        next[dateKey] = entry
+      }
+      return next
+    })
+    setEditing(null)
+    setEditingValue('')
+    setEditError(null)
+  }, [editing, editingValue])
+
+  const handleDelete = useCallback(
+    (dateKey: string, label: string) => {
+      const activeContribution = getActiveContribution(dateKey, label)
+      if (activeContribution > 0) {
+        setEditError('Stop the current activity before deleting it.')
+        return
+      }
+      setActivityLog((prev) => {
+        const entry = prev[dateKey]
+        if (!entry || !(label in entry)) {
+          return prev
+        }
+        const next: ActivityLogMap = { ...prev }
+        const updatedEntry = { ...entry }
+        delete updatedEntry[label]
+        if (Object.keys(updatedEntry).length === 0) {
+          delete next[dateKey]
+        } else {
+          next[dateKey] = updatedEntry
+        }
+        return next
+      })
+      if (editing && editing.dateKey === dateKey && editing.label === label) {
+        setEditing(null)
+        setEditingValue('')
+      }
+      setEditError(null)
+    },
+    [editing],
+  )
+
+  const toggleDate = useCallback((dateKey: string) => {
+    setExpandedDates((prev) => (prev.includes(dateKey) ? prev.filter((key) => key !== dateKey) : [...prev, dateKey]))
+  }, [])
+
+  const getRangeBounds = (): { start: number; end: number } | null => {
+    if (rangeMode === 'week') {
+      const { start: todayStart, end } = getDateBounds(activeDateKey)
+      const startDate = new Date(todayStart)
+      startDate.setDate(startDate.getDate() - 6)
+      const start = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate()).getTime()
+      return { start, end }
+    }
+    if (rangeMode === 'month') {
+      const date = parseDateKey(activeDateKey)
+      const start = new Date(date.getFullYear(), date.getMonth(), 1).getTime()
+      const end = new Date(date.getFullYear(), date.getMonth() + 1, 1).getTime()
+      return { start, end }
+    }
+    const startDate = parseDateKey(customStart)
+    const endDate = parseDateKey(customEnd)
+    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+      return null
+    }
+    if (startDate > endDate) {
+      return null
+    }
+    const start = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate()).getTime()
+    const end = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate() + 1).getTime()
+    return { start, end }
+  }
+
+  const handleDownloadCsv = useCallback(() => {
+    const bounds = getRangeBounds()
+    if (!bounds) {
+      setDownloadError('Please provide a valid date range before downloading.')
+      return
+    }
+    const rows: string[] = []
+    for (const dateKey of sortedDates) {
+      const { start, end } = getDateBounds(dateKey)
+      if (end <= bounds.start || start >= bounds.end) {
+        continue
+      }
+      const dateRows = getRowsForDate(dateKey)
+      if (dateRows.length === 0) {
+        continue
+      }
+      const dateLabel = formatDateDisplay(dateKey)
+      for (const row of dateRows) {
+        rows.push(`${escapeCsvField(dateLabel)},${escapeCsvField(row.label)},${formatDuration(row.totalMs)}`)
+      }
+    }
+    if (rows.length === 0) {
+      setDownloadError('No activity recorded in the selected range.')
+      return
+    }
+    const csv = ['Date,Activity,Duration', ...rows].join('\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    const suffix = rangeMode === 'custom' ? 'custom' : rangeMode
+    link.download = `activity-log-${suffix}.csv`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+    setDownloadError(null)
+  }, [getRowsForDate, rangeMode, sortedDates, customStart, customEnd])
+
+  const activeSide = latest?.side ?? null
+  const activeLabel = useMemo(() => {
+    if (activeSide === null) {
+      return null
+    }
+    return resolveLabel(labels, activeSide)
+  }, [activeSide, labels])
+
+  const sourceTimestamp = latest?.imu_timestamp_text ?? latest?.imu_timestamp_iso ?? latest?.received_at ?? null
+
+  return (
+    <div className="app-shell">
+      <header className="app-header">
+        <h1>Do-Decahedron Orientation</h1>
+        <p className="status-line">
+          <span className="status-label">Latest IMU update:</span>
+          <span className="status-value">{formatTimestamp(sourceTimestamp)}</span>
+        </p>
+        <p className="status-line">
+          <span className="status-label">Current activity:</span>
+          <span className="status-value">{activeLabel ?? 'Waiting for data?'}</span>
+        </p>
+        {error ? <p className="error-text">Error: {error}</p> : null}
+      </header>
+
+      <section className="side-list" aria-label="Side configuration">
+        {sideNumbers.map((side) => {
+          const isActive = side === activeSide
+          return (
+            <div key={side} className="side-row">
+              <div className={`side-card${isActive ? ' side-card--active' : ''}`}>
+                <span className="side-number">{side}</span>
+                <span className="side-label">Side</span>
+              </div>
+              <input
+                type="text"
+                className="activity-input"
+                value={labels[side] ?? ''}
+                placeholder={`Label for side ${side}`}
+                onChange={handleLabelChange(side)}
+              />
+            </div>
+          )
+        })}
+      </section>
+
+      <section className="activity-summary" aria-live="polite">
+        <h2>Activity Log</h2>
+        <div className="range-controls">
+          <label className="range-option">
+            Range
+            <select
+              className="range-select"
+              value={rangeMode}
+              onChange={(event) => setRangeMode(event.target.value as RangeMode)}
+            >
+              <option value="week">This week</option>
+              <option value="month">This month</option>
+              <option value="custom">Custom</option>
+            </select>
+          </label>
+          {rangeMode === 'custom' ? (
+            <>
+              <label className="range-option">
+                From
+                <input
+                  type="date"
+                  className="date-input"
+                  value={customStart}
+                  max={customEnd}
+                  onChange={(event) => setCustomStart(event.target.value)}
+                />
+              </label>
+              <label className="range-option">
+                To
+                <input
+                  type="date"
+                  className="date-input"
+                  value={customEnd}
+                  min={customStart}
+                  onChange={(event) => setCustomEnd(event.target.value)}
+                />
+              </label>
+            </>
+          ) : null}
+          <button type="button" className="download-button" onClick={handleDownloadCsv}>
+            Download CSV
+          </button>
+        </div>
+        {downloadError ? <p className="error-text">{downloadError}</p> : null}
+        {dateGroups.length === 0 ? (
+          <p className="placeholder-text">No activity recorded yet.</p>
+        ) : (
+          dateGroups.map(({ dateKey, rows, totalMs }) => {
+            const isExpanded = expandedDates.includes(dateKey)
+            const state = timelineRef.current
+            return (
+              <div key={dateKey} className="date-group">
+                <button
+                  type="button"
+                  className={`date-header${isExpanded ? ' date-header--expanded' : ''}`}
+                  onClick={() => toggleDate(dateKey)}
+                >
+                  <div className="date-header__title">
+                    <span className="date-label">{formatDateDisplay(dateKey)}</span>
+                    <span className="date-summary">
+                      {rows.length} activit{rows.length === 1 ? 'y' : 'ies'} - {formatDuration(totalMs)}
+                    </span>
+                  </div>
+                  <span className="date-header__icon">{isExpanded ? '\u2212' : '+'}</span>
+                </button>
+                {isExpanded ? (
+                  <table className="activity-table">
+                    <thead>
+                      <tr>
+                        <th scope="col">Activity</th>
+                        <th scope="col">Total Duration</th>
+                        <th scope="col" className="actions-heading">
+                          Actions
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map((row) => {
+                        const isEditing = editing?.dateKey === dateKey && editing.label === row.label
+                        const isLocked = state.currentLabel === row.label && dateKey === activeDateKey
+                        return (
+                          <tr key={`${dateKey}-${row.label}`}>
+                            <td>{row.label}</td>
+                            <td>
+                              {isEditing ? (
+                                <input
+                                  type="text"
+                                  className="duration-input"
+                                  value={editingValue}
+                                  onChange={handleEditChange}
+                                  placeholder="mm:ss or hh:mm:ss"
+                                />
+                              ) : (
+                                <span>{formatDuration(row.totalMs)}</span>
+                              )}
+                            </td>
+                            <td className="actions-cell">
+                              <div className="action-buttons">
+                                {isEditing ? (
+                                  <>
+                                    <button
+                                      type="button"
+                                      className="icon-button icon-button--primary"
+                                      onClick={handleEditSave}
+                                    >
+                                      Save
+                                    </button>
+                                    <button type="button" className="icon-button" onClick={handleEditCancel}>
+                                      Cancel
+                                    </button>
+                                  </>
+                                ) : (
+                                  <>
+                                    <button
+                                      type="button"
+                                      className="icon-button"
+                                      disabled={isLocked}
+                                      onClick={() => beginEdit(dateKey, row.label, row.totalMs)}
+                                    >
+                                      Edit
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="icon-button icon-button--danger"
+                                      disabled={isLocked}
+                                      onClick={() => handleDelete(dateKey, row.label)}
+                                    >
+                                      Delete
+                                    </button>
+                                  </>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                ) : null}
+              </div>
+            )
+          })
+        )}
+        {editError ? <p className="error-text">{editError}</p> : null}
+      </section>
+    </div>
+  )
+}
