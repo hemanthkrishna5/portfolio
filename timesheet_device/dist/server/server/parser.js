@@ -1,6 +1,3 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.parsePayload = parsePayload;
 const whitespaceRegex = /\s+/;
 function parseTimestampIso(timestampText) {
     const trimmed = timestampText.trim();
@@ -59,7 +56,7 @@ function parseTimestampIso(timestampText) {
     }
     return undefined;
 }
-function parsePayload(raw) {
+export function parsePayload(raw) {
     if (!raw.includes("TS:")) {
         return undefined;
     }

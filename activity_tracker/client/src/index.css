@@ -1,0 +1,37 @@
+:root{
+  --bg:#0f1115;--card:#151924;--text:#eaeef7;--muted:#a6b1c2;
+  --accent:#5aa6ff;--accent2:#ff7b72;--accent3:#4ac7a5;--border:#2a3142;
+}
+html,body{background:var(--bg);color:var(--text)}
+body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:2rem}
+h1{margin:0 0 1rem}.subtle{color:var(--muted);margin:0 0 2rem}
+
+.card{
+  background:var(--card);border:1px solid var(--border);border-radius:12px;
+  padding:16px;margin-bottom:20px;box-shadow:0 6px 24px rgba(0,0,0,.25)
+}
+canvas{max-width:100%;height:360px !important;}
+
+/* Basic table styling */
+table {
+  width: 100% !important;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+table thead th {
+  background: #1b2130;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  text-align: center;
+  position: relative;
+  white-space: nowrap;
+}
+table tbody td {
+  color: var(--text);
+  border-top: 1px solid var(--border);
+  background: var(--card);
+  text-align: center;
+}
+table tbody tr:hover td {
+  background: #1a2030;
+}

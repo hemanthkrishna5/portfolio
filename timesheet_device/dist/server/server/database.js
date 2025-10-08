@@ -1,17 +1,16 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.persistReading = persistReading;
-exports.getDatabasePath = getDatabasePath;
-const node_fs_1 = __importDefault(require("node:fs"));
-const node_path_1 = __importDefault(require("node:path"));
-const better_sqlite3_1 = __importDefault(require("better-sqlite3"));
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import Database from "better-sqlite3";
+// --- Fix for __dirname in ESM ---
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+// --- Database path setup ---
 const DATABASE_FILENAME = process.env.MQTT_DATABASE_FILE ?? "timesheet_device.db";
-const DATABASE_PATH = node_path_1.default.resolve(__dirname, "../../data", DATABASE_FILENAME);
-node_fs_1.default.mkdirSync(node_path_1.default.dirname(DATABASE_PATH), { recursive: true });
-const db = new better_sqlite3_1.default(DATABASE_PATH);
+const DATABASE_PATH = path.resolve(__dirname, "../../data", DATABASE_FILENAME);
+fs.mkdirSync(path.dirname(DATABASE_PATH), { recursive: true });
+// --- SQLite setup ---
+const db = new Database(DATABASE_PATH);
 db.pragma("journal_mode = WAL");
 db.exec(`
   CREATE TABLE IF NOT EXISTS imu_readings (
@@ -33,6 +32,7 @@ db.exec(`
   )
 `);
 db.exec("CREATE INDEX IF NOT EXISTS idx_imu_readings_side ON imu_readings(side)");
+// --- Prepared insert statement ---
 const insertStatement = db.prepare(`
   INSERT INTO imu_readings (
     topic,
@@ -51,9 +51,11 @@ const insertStatement = db.prepare(`
     received_at
   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
-function persistReading({ topic, parsed, classification, receivedAtIso }) {
+// --- Persist a reading ---
+export function persistReading({ topic, parsed, classification, receivedAtIso, }) {
     insertStatement.run(topic, parsed.timestampText, parsed.timestampIso ?? null, classification.side ?? null, classification.confident ? 1 : 0, classification.distance ?? null, parsed.ax[0], parsed.ax[1], parsed.ax[2], parsed.gy[0], parsed.gy[1], parsed.gy[2], parsed.raw, receivedAtIso);
 }
-function getDatabasePath() {
+// --- Helper ---
+export function getDatabasePath() {
     return DATABASE_PATH;
 }

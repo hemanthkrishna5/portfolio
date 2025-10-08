@@ -1,15 +1,21 @@
 import fs from "node:fs";
 import path from "node:path";
-
+import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
+import type { ClassificationResult, ParsedMessage } from "../shared/types.js";
 
-import type { ClassificationResult, ParsedMessage } from "../shared/types";
 
+// --- Fix for __dirname in ESM ---
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// --- Database path setup ---
 const DATABASE_FILENAME = process.env.MQTT_DATABASE_FILE ?? "timesheet_device.db";
 const DATABASE_PATH = path.resolve(__dirname, "../../data", DATABASE_FILENAME);
 
 fs.mkdirSync(path.dirname(DATABASE_PATH), { recursive: true });
 
+// --- SQLite setup ---
 const db = new Database(DATABASE_PATH);
 db.pragma("journal_mode = WAL");
 
@@ -42,6 +48,7 @@ type PersistArgs = {
   receivedAtIso: string;
 };
 
+// --- Prepared insert statement ---
 const insertStatement = db.prepare(`
   INSERT INTO imu_readings (
     topic,
@@ -61,7 +68,13 @@ const insertStatement = db.prepare(`
   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 
-export function persistReading({ topic, parsed, classification, receivedAtIso }: PersistArgs): void {
+// --- Persist a reading ---
+export function persistReading({
+  topic,
+  parsed,
+  classification,
+  receivedAtIso,
+}: PersistArgs): void {
   insertStatement.run(
     topic,
     parsed.timestampText,
@@ -80,6 +93,7 @@ export function persistReading({ topic, parsed, classification, receivedAtIso }:
   );
 }
 
+// --- Helper ---
 export function getDatabasePath(): string {
   return DATABASE_PATH;
 }

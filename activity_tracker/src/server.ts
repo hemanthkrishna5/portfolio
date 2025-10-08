@@ -194,6 +194,8 @@ function weekBounds(today = new Date(), offsetWeeks = 0) {
   return { start: isoLocal(start), end: isoLocal(end) };
 }
 
+import { createProxyMiddleware } from 'http-proxy-middleware';
+
 (async function main() {
   resolvePassword();
 
@@ -535,11 +537,13 @@ function weekBounds(today = new Date(), offsetWeeks = 0) {
     }
   });
 
-  // -------- Static site --------
-  app.use('/', express.static(PUBLIC_DIR));
-  app.get('/', (_req, res) => {
-    res.sendFile(path.join(PUBLIC_DIR, 'dashboard.html'));
-  });
+
+  // Proxy all other requests to the vite dev server
+  app.use('/', createProxyMiddleware({
+    target: 'http://localhost:5173',
+    changeOrigin: true,
+    ws: true, // for vite hmr
+  }));
 
   const server = app.listen(PORT, () => {
     console.log(`Listening on http://localhost:${PORT}`);

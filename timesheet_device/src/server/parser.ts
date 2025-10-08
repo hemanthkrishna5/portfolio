@@ -1,4 +1,4 @@
-import type { ParsedMessage } from "../shared/types";
+import type { ParsedMessage } from "../shared/types.js";
 
 
 const whitespaceRegex = /\s+/;

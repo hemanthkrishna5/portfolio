@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { ClassificationResult, SideProfile } from "../shared/types.js";
 
-import type { ClassificationResult, SideProfile } from "../shared/types";
+
 
 const MIN_MARGIN = 0.05;
 

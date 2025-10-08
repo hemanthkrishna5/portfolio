@@ -1,22 +1,20 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-const node_fs_1 = __importDefault(require("node:fs"));
-const node_path_1 = __importDefault(require("node:path"));
-const cors_1 = __importDefault(require("cors"));
-const express_1 = __importDefault(require("express"));
-const mqtt_1 = __importDefault(require("mqtt"));
-const database_1 = require("./database");
-const parser_1 = require("./parser");
-const profiles_1 = require("./profiles");
+import fs from "node:fs";
+import cors from "cors";
+import express from "express";
+import mqtt from "mqtt";
+import { persistReading, getDatabasePath } from "./database.js";
+import { parsePayload } from "./parser.js";
+import { classifyVector, loadProfiles } from "./profiles.js";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 const MQTT_BROKER_URL = process.env.MQTT_BROKER_URL ?? "mqtt://broker.hivemq.com:1883";
 const MQTT_TOPIC = process.env.MQTT_TOPIC ?? "test/Device1_status";
 const HTTP_PORT = Number(process.env.HTTP_PORT ?? 8080);
-const REFERENCE_PATH = process.env.SIDE_REFERENCE_PATH ?? node_path_1.default.resolve(__dirname, "../../data/side_reference.json");
-const ELECTRONICS_HTML_PATH = process.env.ELECTRONICS_HTML_PATH ?? node_path_1.default.resolve(__dirname, "../../../main_website/electronics.html");
-const ELECTRONICS_ROOT_DIR = node_path_1.default.dirname(ELECTRONICS_HTML_PATH);
+const REFERENCE_PATH = process.env.SIDE_REFERENCE_PATH ?? path.resolve(__dirname, "../../data/side_reference.json");
+const ELECTRONICS_HTML_PATH = process.env.ELECTRONICS_HTML_PATH ?? path.resolve(__dirname, "../../../main_website/electronics.html");
+const ELECTRONICS_ROOT_DIR = path.dirname(ELECTRONICS_HTML_PATH);
 const defaultLatest = {
     topic: null,
     side: null,
@@ -50,25 +48,25 @@ function ensureProfilesLoaded() {
     }
 }
 function startHttpServer() {
-    const app = (0, express_1.default)();
-    app.use((0, cors_1.default)());
+    const app = express();
+    app.use(cors());
     app.get("/api/imu/latest", (_request, response) => {
         response.json(getLatest());
     });
     app.get("/healthz", (_request, response) => {
         response.json({ status: "ok" });
     });
-    const clientDistPath = node_path_1.default.resolve(__dirname, "../../dist/client");
-    if (node_fs_1.default.existsSync(clientDistPath)) {
-        app.use("/timesheet-app", express_1.default.static(clientDistPath));
+    const clientDistPath = path.resolve(__dirname, "../../dist/client");
+    if (fs.existsSync(clientDistPath)) {
+        app.use("/timesheet-app", express.static(clientDistPath));
         app.get("/timesheet-app/*", (_request, response) => {
-            response.sendFile(node_path_1.default.join(clientDistPath, "index.html"));
+            response.sendFile(path.join(clientDistPath, "index.html"));
         });
     }
-    const electronicsHtmlExists = node_fs_1.default.existsSync(ELECTRONICS_HTML_PATH);
+    const electronicsHtmlExists = fs.existsSync(ELECTRONICS_HTML_PATH);
     if (electronicsHtmlExists) {
         console.log(`[http] serving electronics page from ${ELECTRONICS_HTML_PATH}`);
-        app.use(express_1.default.static(ELECTRONICS_ROOT_DIR));
+        app.use(express.static(ELECTRONICS_ROOT_DIR));
         app.get("*", (request, response, next) => {
             if (request.path.startsWith("/api/") || request.path.startsWith("/timesheet-app")) {
                 next();
@@ -77,14 +75,14 @@ function startHttpServer() {
             response.sendFile(ELECTRONICS_HTML_PATH);
         });
     }
-    else if (node_fs_1.default.existsSync(clientDistPath)) {
-        app.use(express_1.default.static(clientDistPath));
+    else if (fs.existsSync(clientDistPath)) {
+        app.use(express.static(clientDistPath));
         app.get("*", (request, response, next) => {
             if (request.path.startsWith("/api/")) {
                 next();
                 return;
             }
-            response.sendFile(node_path_1.default.join(clientDistPath, "index.html"));
+            response.sendFile(path.join(clientDistPath, "index.html"));
         });
     }
     app.listen(HTTP_PORT, () => {
@@ -98,7 +96,7 @@ function logClassification(parsed, classification) {
 }
 function startMqttClient() {
     ensureProfilesLoaded();
-    const client = mqtt_1.default.connect(MQTT_BROKER_URL);
+    const client = mqtt.connect(MQTT_BROKER_URL);
     client.on("connect", () => {
         console.log(`[mqtt] connected to ${MQTT_BROKER_URL}`);
         client.subscribe(MQTT_TOPIC, (error) => {
@@ -115,16 +113,16 @@ function startMqttClient() {
         if (!rawText) {
             return;
         }
-        const parsed = (0, parser_1.parsePayload)(rawText);
+        const parsed = parsePayload(rawText);
         if (!parsed) {
             console.warn(`[mqtt] unable to parse payload on ${topic}`);
             return;
         }
         const vector = [...parsed.ax, ...parsed.gy];
-        const classification = (0, profiles_1.classifyVector)(vector, sideProfiles);
+        const classification = classifyVector(vector, sideProfiles);
         const receivedAtIso = new Date().toISOString();
         try {
-            (0, database_1.persistReading)({
+            persistReading({
                 topic,
                 parsed,
                 classification,
@@ -142,9 +140,9 @@ function startMqttClient() {
     });
 }
 async function bootstrap() {
-    sideProfiles = await (0, profiles_1.loadProfiles)(REFERENCE_PATH);
+    sideProfiles = await loadProfiles(REFERENCE_PATH);
     console.log(`[bootstrap] loaded ${sideProfiles.length} side profiles`);
-    console.log(`[bootstrap] database file: ${(0, database_1.getDatabasePath)()}`);
+    console.log(`[bootstrap] database file: ${getDatabasePath()}`);
     ensureProfilesLoaded();
     startHttpServer();
     startMqttClient();

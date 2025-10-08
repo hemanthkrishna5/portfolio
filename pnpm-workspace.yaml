@@ -1,0 +1,9 @@
+packages:
+  - main_website
+  - timesheet_device
+  - activity_tracker
+  - activity_tracker/client
+
+ignoredBuiltDependencies:
+  - better-sqlite3
+  - esbuild

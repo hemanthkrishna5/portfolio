@@ -1,7 +1,5 @@
 import fs from "node:fs";
 
-import path from "node:path";
-
 
 
 import cors from "cors";
@@ -11,17 +9,15 @@ import express from "express";
 import mqtt from "mqtt";
 
 
+import type { LatestReadingPayload, ParsedMessage, SideProfile } from "../shared/types.js";
+import { persistReading, getDatabasePath } from "./database.js";
+import { parsePayload } from "./parser.js";
+import { classifyVector, loadProfiles } from "./profiles.js";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-import type { LatestReadingPayload, ParsedMessage, SideProfile } from "../shared/types";
-
-
-
-import { persistReading, getDatabasePath } from "./database";
-
-import { parsePayload } from "./parser";
-
-import { classifyVector, loadProfiles } from "./profiles";
-
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 
 const MQTT_BROKER_URL = process.env.MQTT_BROKER_URL ?? "mqtt://broker.hivemq.com:1883";

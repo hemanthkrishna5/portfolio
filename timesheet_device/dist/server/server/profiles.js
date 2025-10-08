@@ -1,12 +1,5 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.loadProfiles = loadProfiles;
-exports.classifyVector = classifyVector;
-const promises_1 = __importDefault(require("node:fs/promises"));
-const node_path_1 = __importDefault(require("node:path"));
+import fs from "node:fs/promises";
+import path from "node:path";
 const MIN_MARGIN = 0.05;
 function toTuple(values) {
     if (!values || values.length !== 3) {
@@ -42,9 +35,9 @@ function buildProfile(side, raw) {
         margins
     };
 }
-async function loadProfiles(referenceFilePath) {
-    const resolvedPath = node_path_1.default.resolve(referenceFilePath);
-    const rawContent = await promises_1.default.readFile(resolvedPath, "utf-8");
+export async function loadProfiles(referenceFilePath) {
+    const resolvedPath = path.resolve(referenceFilePath);
+    const rawContent = await fs.readFile(resolvedPath, "utf-8");
     const parsed = JSON.parse(rawContent);
     const entries = Object.entries(parsed)
         .map(([sideText, payload]) => ({ side: Number(sideText), payload }))
@@ -75,7 +68,7 @@ function withinRanges(vector, profile) {
     }
     return true;
 }
-function classifyVector(vector, profiles) {
+export function classifyVector(vector, profiles) {
     if (profiles.length === 0) {
         return {
             side: null,

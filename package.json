@@ -1,8 +1,23 @@
 {
-    "name":  "portfolio-root",
-    "version":  "0.0.0",
-    "private":  true,
-    "scripts":  {
-                    "dev":  "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File ./scripts/dev.ps1"
-                }
+  "name": "portfolio",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently \"pnpm --filter activity-tracker dev\" \"pnpm --filter @portfolio/timesheet-device-ui dev:server\" \"pnpm --filter @portfolio/timesheet-device-ui dev:client\" \"pnpm --filter main_website dev\""
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  },
+  "pnpm": {
+    "allowed-build-scripts": [
+      "better-sqlite3",
+      "esbuild"
+    ],
+    "ignoredBuiltDependencies": [
+      "better-sqlite3",
+      "esbuild"
+    ],
+    "onlyBuiltDependencies": [
+      "better-sqlite3"
+    ]
+  }
 }

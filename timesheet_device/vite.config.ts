@@ -13,7 +13,7 @@ export default defineConfig({
     }
   },
   server: {
-    port: 5173,
+    port: 5175,
     proxy: {
       "/api": {
         target: "http://localhost:8080",
@@ -22,7 +22,21 @@ export default defineConfig({
     }
   },
   build: {
+    lib: {
+      entry: path.resolve(__dirname, 'src/client/index.ts'),
+      name: 'TimesheetDeviceUI',
+      fileName: 'index'
+    },
     outDir: "dist/client",
-    emptyOutDir: false
+    emptyOutDir: false,
+    rollupOptions: {
+      external: ['react', 'react-dom'],
+      output: {
+        globals: {
+          react: 'React',
+          'react-dom': 'ReactDOM'
+        }
+      }
+    }
   }
 });
