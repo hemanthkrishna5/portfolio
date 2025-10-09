@@ -2,7 +2,7 @@ import fs from "node:fs";
 import cors from "cors";
 import express from "express";
 import mqtt from "mqtt";
-import { persistReading, getDatabasePath } from "./database.js";
+import { persistReading, getDatabasePath, getLatestReading } from "./database.js";
 import { parsePayload } from "./parser.js";
 import { classifyVector, loadProfiles } from "./profiles.js";
 import path from "node:path";
@@ -140,6 +140,14 @@ function startMqttClient() {
     });
 }
 async function bootstrap() {
+    const initialReading = getLatestReading();
+    if (initialReading) {
+        console.log("[bootstrap] starting with latest reading from database");
+        latestReading = initialReading;
+    }
+    else {
+        console.log("[bootstrap] no previous reading found in database");
+    }
     sideProfiles = await loadProfiles(REFERENCE_PATH);
     console.log(`[bootstrap] loaded ${sideProfiles.length} side profiles`);
     console.log(`[bootstrap] database file: ${getDatabasePath()}`);

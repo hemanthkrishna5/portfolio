@@ -55,6 +55,24 @@ const insertStatement = db.prepare(`
 export function persistReading({ topic, parsed, classification, receivedAtIso, }) {
     insertStatement.run(topic, parsed.timestampText, parsed.timestampIso ?? null, classification.side ?? null, classification.confident ? 1 : 0, classification.distance ?? null, parsed.ax[0], parsed.ax[1], parsed.ax[2], parsed.gy[0], parsed.gy[1], parsed.gy[2], parsed.raw, receivedAtIso);
 }
+// --- Get latest reading ---
+const selectLatestStatement = db.prepare("SELECT * FROM imu_readings ORDER BY id DESC LIMIT 1");
+export function getLatestReading() {
+    const row = selectLatestStatement.get();
+    if (!row) {
+        return null;
+    }
+    return {
+        topic: row.topic,
+        side: row.side,
+        confidence: row.confidence === 1,
+        distance: row.distance,
+        imu_timestamp_text: row.imu_timestamp_text,
+        imu_timestamp_iso: row.imu_timestamp_iso,
+        received_at: row.received_at,
+        raw_payload: row.raw_payload,
+    };
+}
 // --- Helper ---
 export function getDatabasePath() {
     return DATABASE_PATH;

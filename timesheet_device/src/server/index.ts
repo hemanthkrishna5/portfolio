@@ -10,7 +10,7 @@ import mqtt from "mqtt";
 
 
 import type { LatestReadingPayload, ParsedMessage, SideProfile } from "../shared/types.js";
-import { persistReading, getDatabasePath } from "./database.js";
+import { persistReading, getDatabasePath, getLatestReading } from "./database.js";
 import { parsePayload } from "./parser.js";
 import { classifyVector, loadProfiles } from "./profiles.js";
 import path from "node:path";
@@ -330,6 +330,14 @@ function startMqttClient(): void {
 
 
 async function bootstrap(): Promise<void> {
+  const initialReading = getLatestReading();
+  if (initialReading) {
+    console.log("[bootstrap] starting with latest reading from database");
+    latestReading = initialReading;
+  } else {
+    console.log("[bootstrap] no previous reading found in database");
+  }
+
 
   sideProfiles = await loadProfiles(REFERENCE_PATH);
 
@@ -358,4 +366,3 @@ bootstrap().catch((error) => {
   process.exitCode = 1;
 
 });
-

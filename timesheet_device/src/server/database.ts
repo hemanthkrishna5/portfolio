@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
-import type { ClassificationResult, ParsedMessage } from "../shared/types.js";
+import type { ClassificationResult, ParsedMessage, LatestReadingPayload } from "../shared/types.js";
 
 
 // --- Fix for __dirname in ESM ---
@@ -91,6 +91,29 @@ export function persistReading({
     parsed.raw,
     receivedAtIso
   );
+}
+
+// --- Get latest reading ---
+const selectLatestStatement = db.prepare(
+  "SELECT * FROM imu_readings ORDER BY id DESC LIMIT 1"
+);
+
+export function getLatestReading(): LatestReadingPayload | null {
+  const row = selectLatestStatement.get() as any;
+  if (!row) {
+    return null;
+  }
+
+  return {
+    topic: row.topic,
+    side: row.side,
+    confidence: row.confidence === 1,
+    distance: row.distance,
+    imu_timestamp_text: row.imu_timestamp_text,
+    imu_timestamp_iso: row.imu_timestamp_iso,
+    received_at: row.received_at,
+    raw_payload: row.raw_payload,
+  };
 }
 
 // --- Helper ---
