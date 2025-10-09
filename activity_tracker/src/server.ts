@@ -309,7 +309,11 @@ import { createProxyMiddleware } from 'http-proxy-middleware';
   // big payloads + urlencoded
   app.use(express.json({ limit: '500mb', inflate: true, type: 'application/json' }));
   app.use(express.urlencoded({ limit: '500mb', extended: true }));
-
+  const clientDistPath = path.resolve(__dirname, '../client/dist');
+  app.use('/activity-tracker', express.static(clientDistPath));
+  app.get('/activity-tracker/*', (_req, res) => {
+    res.sendFile(path.join(clientDistPath, 'index.html'));
+  });
   // 413 handler (for body too large)
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     if (err?.type === 'entity.too.large' || err?.status === 413) {

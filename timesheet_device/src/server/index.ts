@@ -24,7 +24,7 @@ const MQTT_BROKER_URL = process.env.MQTT_BROKER_URL ?? "mqtt://broker.hivemq.com
 
 const MQTT_TOPIC = process.env.MQTT_TOPIC ?? "test/Device1_status";
 
-const HTTP_PORT = Number(process.env.HTTP_PORT ?? 8080);
+const HTTP_PORT = Number(process.env.PORT ?? 8080);
 
 const REFERENCE_PATH = process.env.SIDE_REFERENCE_PATH ?? path.resolve(__dirname, "../../data/side_reference.json");
 
