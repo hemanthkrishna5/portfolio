@@ -26,7 +26,7 @@ export function Home() {
       <Box sx={{ bgcolor: 'background.paper', py: 8, borderRadius: 2, mb: 4 }}>
         <Container>
           <Grid container spacing={4} alignItems="center">
-            <Grid size={{ xs: 12, md: 6 }}>
+            <Grid item xs={12} md={6}>
               <motion.div
                 variants={{
                   hidden: { opacity: 0, x: -100 },
@@ -55,7 +55,7 @@ export function Home() {
                 </motion.div>
               </motion.div>
             </Grid>
-            <Grid size={{ xs: 12, md: 6 }}>
+            <Grid item xs={12} md={6}>
               <motion.div initial={{ x: 100, opacity: 0 }} animate={{ x: 0, opacity: 1 }} transition={{ duration: 0.8 }}>
                 <Card>
                   <CardContent>
@@ -75,7 +75,7 @@ export function Home() {
       </Box>
 
       <Grid container spacing={4}>
-        <Grid size={{ xs: 12, md: 4 }}>
+        <Grid item xs={12} md={4}>
           <motion.div whileHover={{ scale: 1.05 }} initial={{ opacity: 0, y: 50 }} whileInView={{ opacity: 1, y: 0, transition: { duration: 0.5 } }}>
             <Card sx={{ height: '100%' }}>
               <CardContent>
@@ -87,7 +87,7 @@ export function Home() {
             </Card>
           </motion.div>
         </Grid>
-        <Grid size={{ xs: 12, md: 4 }}>
+        <Grid item xs={12} md={4}>
           <motion.div whileHover={{ scale: 1.05 }} initial={{ opacity: 0, y: 50 }} whileInView={{ opacity: 1, y: 0, transition: { duration: 0.5, delay: 0.1 } }}>
             <Card sx={{ height: '100%' }}>
               <CardContent>
@@ -99,7 +99,7 @@ export function Home() {
             </Card>
           </motion.div>
         </Grid>
-        <Grid size={{ xs: 12, md: 4 }}>
+        <Grid item xs={12} md={4}>
           <motion.div whileHover={{ scale: 1.05 }} initial={{ opacity: 0, y: 50 }} whileInView={{ opacity: 1, y: 0, transition: { duration: 0.5, delay: 0.2 } }}>
             <Card sx={{ height: '100%' }}>
               <CardContent>

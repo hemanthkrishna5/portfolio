@@ -5,7 +5,8 @@
     "dev": "concurrently \"pnpm --filter activity-tracker dev\" \"pnpm --filter @portfolio/timesheet-device-ui dev:server\" \"pnpm --filter @portfolio/timesheet-device-ui dev:client\" \"pnpm --filter main_website dev\""
   },
   "devDependencies": {
-    "concurrently": "^9.2.1"
+    "concurrently": "^9.2.1",
+    "wrangler": "^3.57.0"
   },
   "pnpm": {
     "allowed-build-scripts": [

@@ -1,4 +1,4 @@
-import { Card, CardContent, Typography, Button, Box } from '@mui/material';
+import { Card, CardContent, Typography } from '@mui/material';
 import { motion } from 'framer-motion';
 
 export function Activity() {
