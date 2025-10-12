@@ -1,5 +1,7 @@
 node_modules
 activity_data.sqlite
 .env
-data/
+data/*
+!data/side_reference.json
+data/timesheet_device.db*
 timesheet_device.db*

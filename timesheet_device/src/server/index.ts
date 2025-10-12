@@ -58,8 +58,8 @@ const defaultLatest: LatestReadingPayload = {
 
 
 let latestReading: LatestReadingPayload = { ...defaultLatest };
-
 let sideProfiles: SideProfile[] = [];
+let missingProfilesWarningShown = false;
 
 
 
@@ -106,13 +106,11 @@ function getLatest(): LatestReadingPayload {
 
 
 function ensureProfilesLoaded(): void {
-
-  if (sideProfiles.length === 0) {
-
-    throw new Error("No side profiles available for classification. Check side_reference.json");
-
+  // Log once when reference data is missing so the service can continue in development environments.
+  if (sideProfiles.length === 0 && !missingProfilesWarningShown) {
+    console.warn("[profiles] No side profiles available for classification. Set SIDE_REFERENCE_PATH or create data/side_reference.json.");
+    missingProfilesWarningShown = true;
   }
-
 }
 
 

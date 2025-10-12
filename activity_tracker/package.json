@@ -2,8 +2,8 @@
   "name": "activity-tracker",
   "version": "1.0.0",
   "scripts": {
-    "predev": "start powershell -NoExit -Command \"cloudflared tunnel run activity-tracking\"",
-    "dev": "concurrently \"nodemon --watch src --ext ts --exec \\\"ts-node src/server.ts\\\"\" \"pnpm -C client dev\"",
+    "dev": "concurrently --kill-others-on-fail \"pnpm run tunnel\" \"nodemon --watch src --ext ts --exec \\\"ts-node src/server.ts\\\"\" \"pnpm -C client dev\"",
+    "tunnel": "node scripts/start-tunnel.js",
     "start": "ts-node src/server.ts",
     "build": "tsc"
   },
