@@ -331,8 +331,11 @@ import { createProxyMiddleware } from 'http-proxy-middleware';
   app.use(express.urlencoded({ limit: '500mb', extended: true }));
   const clientDistPath = path.resolve(__dirname, '../client/dist');
   app.use('/activity-tracker', express.static(clientDistPath));
-  app.get(['/activity-tracker', '/activity-tracker/:path(*)'], (_req, res) => {
+  app.get(/^\/activity-tracker(?:\/.*)?$/, (_req, res) => {
     res.sendFile(path.join(clientDistPath, 'index.html'));
+  });
+  app.get('/', (_req, res) => {
+    res.redirect(302, '/activity-tracker/');
   });
   // 413 handler (for body too large)
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
@@ -563,11 +566,13 @@ import { createProxyMiddleware } from 'http-proxy-middleware';
 
 
   // Proxy all other requests to the vite dev server
-  app.use('/', createProxyMiddleware({
-    target: 'http://localhost:5173',
-    changeOrigin: true,
-    ws: true, // for vite hmr
-  }));
+  if (process.env.NODE_ENV !== 'production') {
+    app.use('/', createProxyMiddleware({
+      target: 'http://localhost:5173',
+      changeOrigin: true,
+      ws: true, // for vite hmr
+    }));
+  }
 
   const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`Listening on http://localhost:${PORT}`);

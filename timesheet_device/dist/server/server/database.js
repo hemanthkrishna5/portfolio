@@ -6,8 +6,11 @@ import Database from "better-sqlite3";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 // --- Database path setup ---
+const DATA_DIR = process.env.TIMESHEET_DATA_DIR
+    ? path.resolve(process.env.TIMESHEET_DATA_DIR)
+    : path.resolve(__dirname, "../../data");
 const DATABASE_FILENAME = process.env.MQTT_DATABASE_FILE ?? "timesheet_device.db";
-const DATABASE_PATH = path.resolve(__dirname, "../../data", DATABASE_FILENAME);
+const DATABASE_PATH = path.resolve(DATA_DIR, DATABASE_FILENAME);
 fs.mkdirSync(path.dirname(DATABASE_PATH), { recursive: true });
 // --- SQLite setup ---
 const db = new Database(DATABASE_PATH);
@@ -76,4 +79,45 @@ export function getLatestReading() {
 // --- Helper ---
 export function getDatabasePath() {
     return DATABASE_PATH;
+}
+const baseHistoryQuery = `
+  SELECT
+    topic,
+    imu_timestamp_text,
+    imu_timestamp_iso,
+    side,
+    confidence,
+    distance,
+    raw_payload,
+    received_at
+  FROM imu_readings
+`;
+export function getReadingHistory({ limit, sinceIso } = {}) {
+    const clauses = [];
+    const params = [];
+    if (sinceIso) {
+        clauses.push("received_at >= ?");
+        params.push(sinceIso);
+    }
+    let sql = baseHistoryQuery;
+    if (clauses.length > 0) {
+        sql += ` WHERE ${clauses.join(" AND ")}`;
+    }
+    sql += " ORDER BY received_at ASC, id ASC";
+    if (typeof limit === "number" && Number.isFinite(limit) && limit > 0) {
+        sql += " LIMIT ?";
+        params.push(Math.floor(limit));
+    }
+    const statement = db.prepare(sql);
+    const rows = statement.all(...params);
+    return rows.map((row) => ({
+        topic: row.topic ?? null,
+        side: typeof row.side === "number" ? row.side : null,
+        confidence: row.confidence === 1,
+        distance: row.distance,
+        imu_timestamp_text: row.imu_timestamp_text,
+        imu_timestamp_iso: row.imu_timestamp_iso,
+        received_at: row.received_at,
+        raw_payload: row.raw_payload
+    }));
 }

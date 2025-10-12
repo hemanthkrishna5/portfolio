@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
 
 const API_ENDPOINT = '/api/imu/latest'
+const HISTORY_ENDPOINT = '/api/imu/history'
 const TOTAL_SIDES = 12
 const POLL_INTERVAL_MS = 1000
 const LABEL_STORAGE_KEY = 'dodec-labels'
@@ -50,6 +51,13 @@ const createEmptyLabels = (): Record<number, string> => {
   }
   return result
 }
+
+const createTimelineState = (): TimelineState => ({
+  currentLabel: null,
+  startTime: null,
+  lastTimestamp: null,
+  lastSide: null,
+})
 
 const resolveLabel = (labels: Record<number, string>, side: number): string => {
   const entry = labels[side]?.trim()
@@ -213,12 +221,8 @@ export default function App() {
   })
 
   const labelsRef = useRef(labels)
-  const timelineRef = useRef<TimelineState>({
-    currentLabel: null,
-    startTime: null,
-    lastTimestamp: null,
-    lastSide: null,
-  })
+  const timelineRef = useRef<TimelineState>(createTimelineState())
+  const [historyReady, setHistoryReady] = useState(false)
 
   const addDurationToLog = useCallback((label: string, startMs: number, endMs: number) => {
     if (endMs <= startMs) {
@@ -241,6 +245,11 @@ export default function App() {
       }
       return next
     })
+  }, [])
+
+  const resetActivityState = useCallback(() => {
+    timelineRef.current = createTimelineState()
+    setActivityLog(() => ({}))
   }, [])
 
   const handleReading = useCallback(
@@ -300,6 +309,62 @@ export default function App() {
   }, [activityLog])
 
   useEffect(() => {
+    let cancelled = false
+
+    const loadHistory = async () => {
+      try {
+        const response = await fetch(`${HISTORY_ENDPOINT}?limit=5000`, { cache: 'no-store' })
+        if (!response.ok) {
+          throw new Error(`History request failed with status ${response.status}`)
+        }
+        const entries = (await response.json()) as LatestReadingResponse[]
+        if (cancelled) {
+          return
+        }
+
+        resetActivityState()
+
+        let mostRecent: LatestReadingResponse | null = null
+        for (const entry of entries) {
+          if (cancelled) {
+            break
+          }
+          handleReading(entry)
+          mostRecent = entry
+        }
+
+        if (mostRecent) {
+          setLatest({
+            side: typeof mostRecent.side === 'number' ? mostRecent.side : null,
+            imu_timestamp_text: mostRecent.imu_timestamp_text ?? null,
+            imu_timestamp_iso: mostRecent.imu_timestamp_iso ?? null,
+            received_at: mostRecent.received_at ?? null,
+            confidence: mostRecent.confidence ?? null,
+          })
+        }
+        setError(null)
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : 'Unknown error while loading history')
+        }
+      } finally {
+        if (!cancelled) {
+          setHistoryReady(true)
+        }
+      }
+    }
+
+    loadHistory()
+
+    return () => {
+      cancelled = true
+    }
+  }, [handleReading, resetActivityState])
+
+  useEffect(() => {
+    if (!historyReady) {
+      return
+    }
     let isMounted = true
 
     const fetchLatest = async () => {
@@ -335,7 +400,7 @@ export default function App() {
       isMounted = false
       window.clearInterval(intervalId)
     }
-  }, [handleReading])
+  }, [handleReading, historyReady])
 
   const activeState = timelineRef.current
   const activeDateKey = activeState.lastTimestamp ? toDateKey(activeState.lastTimestamp) : toDateKey(Date.now())
@@ -589,27 +654,6 @@ export default function App() {
         </p>
         {error ? <p className="error-text">Error: {error}</p> : null}
       </header>
-
-      <section className="side-list" aria-label="Side configuration">
-        {sideNumbers.map((side) => {
-          const isActive = side === activeSide
-          return (
-            <div key={side} className="side-row">
-              <div className={`side-card${isActive ? ' side-card--active' : ''}`}>
-                <span className="side-number">{side}</span>
-                <span className="side-label">Side</span>
-              </div>
-              <input
-                type="text"
-                className="activity-input"
-                value={labels[side] ?? ''}
-                placeholder={`Label for side ${side}`}
-                onChange={handleLabelChange(side)}
-              />
-            </div>
-          )
-        })}
-      </section>
 
       <section className="activity-summary" aria-live="polite">
         <h2>Activity Log</h2>

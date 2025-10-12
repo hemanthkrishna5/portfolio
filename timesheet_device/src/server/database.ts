@@ -123,3 +123,65 @@ export function getLatestReading(): LatestReadingPayload | null {
 export function getDatabasePath(): string {
   return DATABASE_PATH;
 }
+
+interface HistoryOptions {
+  limit?: number;
+  sinceIso?: string;
+}
+
+const baseHistoryQuery = `
+  SELECT
+    topic,
+    imu_timestamp_text,
+    imu_timestamp_iso,
+    side,
+    confidence,
+    distance,
+    raw_payload,
+    received_at
+  FROM imu_readings
+`;
+
+export function getReadingHistory({ limit, sinceIso }: HistoryOptions = {}): LatestReadingPayload[] {
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+
+  if (sinceIso) {
+    clauses.push("received_at >= ?");
+    params.push(sinceIso);
+  }
+
+  let sql = baseHistoryQuery;
+  if (clauses.length > 0) {
+    sql += ` WHERE ${clauses.join(" AND ")}`;
+  }
+  sql += " ORDER BY received_at ASC, id ASC";
+
+  if (typeof limit === "number" && Number.isFinite(limit) && limit > 0) {
+    sql += " LIMIT ?";
+    params.push(Math.floor(limit));
+  }
+
+  const statement = db.prepare(sql);
+  const rows = statement.all(...params) as Array<{
+    topic: string | null;
+    imu_timestamp_text: string | null;
+    imu_timestamp_iso: string | null;
+    side: number | null;
+    confidence: number | null;
+    distance: number | null;
+    raw_payload: string;
+    received_at: string;
+  }>;
+
+  return rows.map((row) => ({
+    topic: row.topic ?? null,
+    side: typeof row.side === "number" ? row.side : null,
+    confidence: row.confidence === 1,
+    distance: row.distance,
+    imu_timestamp_text: row.imu_timestamp_text,
+    imu_timestamp_iso: row.imu_timestamp_iso,
+    received_at: row.received_at,
+    raw_payload: row.raw_payload
+  }));
+}

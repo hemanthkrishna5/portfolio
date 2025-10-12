@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Container, Typography, Button, Grid, Card, CardContent, Box } from '@mui/material';

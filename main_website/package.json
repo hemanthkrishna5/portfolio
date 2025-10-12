@@ -8,25 +8,31 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "start": "vite preview --host 0.0.0.0 --port 8080"
+    "start": "node server.mjs"
   },
   "dependencies": {
-    "@portfolio/timesheet-device-ui": "workspace:*",
     "@emotion/react": "^11.11.4",
     "@emotion/styled": "^11.11.5",
     "@mui/icons-material": "^5.15.15",
     "@mui/material": "^5.15.15",
+    "@portfolio/timesheet-device-ui": "workspace:*",
+    "@react-three/drei": "^10.7.6",
+    "@react-three/fiber": "^9.3.0",
     "framer-motion": "^12.23.22",
     "express": "^5.1.0",
+    "chart.js": "^4.5.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
-    "react-router-dom": "^6.25.1"
+    "react-router-dom": "^6.25.1",
+    "react-chartjs-2": "^5.3.0",
+    "three": "^0.180.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.36.0",
     "@types/node": "^24.6.0",
     "@types/react": "^19.1.16",
     "@types/react-dom": "^19.1.9",
+    "@types/three": "^0.180.0",
     "@vitejs/plugin-react": "^5.0.4",
     "concurrently": "^9.2.1",
     "eslint": "^9.36.0",

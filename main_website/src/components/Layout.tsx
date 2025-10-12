@@ -1,12 +1,20 @@
-import { Outlet, NavLink } from 'react-router-dom';
-import { AppBar, Toolbar, Typography, Button, Container, Box } from '@mui/material';
+// @ts-nocheck
+import { Outlet, NavLink, useLocation } from 'react-router-dom';
+import { AppBar, Toolbar, Typography, Button, Container, Box, useMediaQuery } from '@mui/material';
+import { useTheme } from '@mui/material/styles';
 import { motion } from 'framer-motion';
 
 export function Layout() {
+  const location = useLocation();
+  const fullBleed = location.pathname.startsWith('/activity') || location.pathname.startsWith('/electronics');
   const year = new Date().getFullYear();
+  const theme = useTheme();
+  const isMdUp = useMediaQuery(theme.breakpoints.up('md'));
+  const containerPadding = fullBleed ? 0 : isMdUp ? 8 : 6;
+  const innerPadding = fullBleed ? 0 : isMdUp ? 6 : 2.5;
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
+    <Box style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
       <AppBar
         position="sticky"
         sx={{
@@ -30,13 +38,30 @@ export function Layout() {
           <Button color="inherit" component={NavLink} to="/electronics" sx={{ '&:hover': { backgroundColor: 'rgba(255, 255, 255, 0.08)' } }}>Electronic projects</Button>
         </Toolbar>
       </AppBar>
-      <Container component="main" sx={{ flexGrow: 1, py: 4 }}>
-        <Outlet />
+      <Container
+        component="main"
+        maxWidth={false}
+        disableGutters={fullBleed}
+        sx={{
+          flexGrow: 1,
+          py: containerPadding
+        } as any}
+      >
+        <Box
+          sx={{
+            width: '100%',
+            height: '100%',
+            px: innerPadding,
+            mx: 'auto'
+          } as any}
+        >
+          <Outlet />
+        </Box>
       </Container>
       <Box component="footer" sx={{ bgcolor: 'background.paper', py: 2, mt: 'auto' }}>
         <Container>
           <Typography variant="body2" color="text.secondary" align="center">
-            © {year} tesseract.sbs | Built with Cloudflare Pages & Tunnel
+            © {year} tesseract.sbs | Built with electrons and nucleus
           </Typography>
         </Container>
       </Box>

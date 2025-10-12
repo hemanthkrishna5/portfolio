@@ -37,8 +37,25 @@ function buildProfile(side, raw) {
 }
 export async function loadProfiles(referenceFilePath) {
     const resolvedPath = path.resolve(referenceFilePath);
-    const rawContent = await fs.readFile(resolvedPath, "utf-8");
-    const parsed = JSON.parse(rawContent);
+    let rawContent;
+    try {
+        rawContent = await fs.readFile(resolvedPath, "utf-8");
+    }
+    catch (error) {
+        if (error.code === "ENOENT") {
+            console.warn(`[profiles] reference file not found at ${resolvedPath}; continuing without side profiles`);
+            return [];
+        }
+        throw error;
+    }
+    let parsed;
+    try {
+        parsed = JSON.parse(rawContent);
+    }
+    catch (error) {
+        console.error(`[profiles] failed to parse reference file at ${resolvedPath}: ${error.message}`);
+        return [];
+    }
     const entries = Object.entries(parsed)
         .map(([sideText, payload]) => ({ side: Number(sideText), payload }))
         .filter(({ side }) => Number.isInteger(side));
