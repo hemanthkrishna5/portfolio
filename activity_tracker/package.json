@@ -2,10 +2,12 @@
   "name": "activity-tracker",
   "version": "1.0.0",
   "scripts": {
-    "dev": "concurrently --kill-others-on-fail \"pnpm run tunnel\" \"nodemon --watch src --ext ts --exec \\\"ts-node src/server.ts\\\"\" \"pnpm -C client dev\"",
-    "tunnel": "node scripts/start-tunnel.js",
-    "start": "ts-node src/server.ts",
-    "build": "tsc"
+    "dev": "concurrently --kill-others-on-fail \"nodemon --watch src --ext ts --exec \\\"ts-node src/server.ts\\\"\" \"pnpm -C client dev\"",
+    "start": "node dist/server.js",
+    "start:dev": "ts-node src/server.ts",
+    "build": "pnpm run build:server && pnpm run build:client",
+    "build:server": "tsc",
+    "build:client": "pnpm -C client build"
   },
   "keywords": [],
   "author": "",

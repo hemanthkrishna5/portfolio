@@ -114,12 +114,31 @@ function aggregateWorkoutsByDate(workouts: any[]) {
 
 const ROOT = process.cwd();
 const PUBLIC_DIR = path.resolve(ROOT, 'public');
-const DB_FILE = path.resolve(ROOT, 'activity_data.sqlite');
+const DB_FILE = process.env.DB_PATH
+  ? path.resolve(process.env.DB_PATH)
+  : path.resolve(ROOT, 'activity_data.sqlite');
+
+fs.mkdirSync(path.dirname(DB_FILE), { recursive: true });
 const PORT = Number(process.env.PORT || 4000);
 const BASIC_USER = process.env.BASIC_USER || 'hemanth';
 let BASIC_PASSWORD = process.env.BASIC_PASSWORD || 'anisha334';
 
+const boolFromEnv = (value?: string): boolean => {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes';
+};
+
+const NODE_ENV = process.env.NODE_ENV ?? 'development';
+const enableAuthExplicitly = boolFromEnv(process.env.ENABLE_BASIC_AUTH);
+const disableAuthExplicitly = boolFromEnv(process.env.DISABLE_BASIC_AUTH);
+const basicAuthEnabled = enableAuthExplicitly || (!disableAuthExplicitly && NODE_ENV === 'production');
+
 function resolvePassword() {
+  if (!basicAuthEnabled) {
+    BASIC_PASSWORD = '';
+    console.log('🔓 Basic-Auth disabled (development mode).');
+    return;
+  }
   if (process.env.BASIC_PASSWORD && process.env.BASIC_PASSWORD.length > 0) {
     BASIC_PASSWORD = process.env.BASIC_PASSWORD;
     console.log('🔒 Basic-Auth password (from env).');
@@ -130,6 +149,7 @@ function resolvePassword() {
 }
 
 function basicAuth(req: Request, res: Response, next: NextFunction) {
+  if (!basicAuthEnabled) return next();
   if (req.method === 'OPTIONS') return next();
   const header = req.headers.authorization || '';
   const expected = 'Basic ' + Buffer.from(`${BASIC_USER}:${BASIC_PASSWORD}`).toString('base64');
@@ -311,7 +331,7 @@ import { createProxyMiddleware } from 'http-proxy-middleware';
   app.use(express.urlencoded({ limit: '500mb', extended: true }));
   const clientDistPath = path.resolve(__dirname, '../client/dist');
   app.use('/activity-tracker', express.static(clientDistPath));
-  app.get('/activity-tracker/*', (_req, res) => {
+  app.get(['/activity-tracker', '/activity-tracker/:path(*)'], (_req, res) => {
     res.sendFile(path.join(clientDistPath, 'index.html'));
   });
   // 413 handler (for body too large)
@@ -549,10 +569,14 @@ import { createProxyMiddleware } from 'http-proxy-middleware';
     ws: true, // for vite hmr
   }));
 
-  const server = app.listen(PORT, () => {
+  const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`Listening on http://localhost:${PORT}`);
-    console.log(`🔑 Basic auth user: ${BASIC_USER}`);
-    console.log(`🔑 Basic auth password: ${BASIC_PASSWORD || '(empty!)'}`);
+    if (basicAuthEnabled) {
+      console.log(`🔑 Basic auth user: ${BASIC_USER}`);
+      console.log(`🔑 Basic auth password: ${BASIC_PASSWORD || '(empty!)'}`);
+    } else {
+      console.log('🔓 Basic auth is disabled (set ENABLE_BASIC_AUTH=1 or NODE_ENV=production to enable).');
+    }
   });
 
   // longer timeouts for large uploads

@@ -1,7 +1,7 @@
 {
   "name": "@portfolio/timesheet-device-ui",
   "version": "0.1.0",
-  "packageManager": "pnpm@10.12.2",
+  "packageManager": "pnpm@9.6.0",
   "type": "module",
   "files": ["dist/client", "dist/server"],
   "engines": {
@@ -27,6 +27,7 @@
     "dev:server": "tsx watch src/server/index.ts",
     "dev:client": "vite",
     "dev": "pnpm run dev:server",
+    "start": "vite preview --host 0.0.0.0 --port 8080",
     "build:server": "tsc -p tsconfig.server.json",
     "build:client": "vite build",
     "build": "pnpm run build:server && pnpm run build:client"

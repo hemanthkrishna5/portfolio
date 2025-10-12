@@ -20,13 +20,17 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 
+const DATA_DIR = process.env.TIMESHEET_DATA_DIR
+  ? path.resolve(process.env.TIMESHEET_DATA_DIR)
+  : path.resolve(__dirname, "../../data");
+
 const MQTT_BROKER_URL = process.env.MQTT_BROKER_URL ?? "mqtt://broker.hivemq.com:1883";
 
 const MQTT_TOPIC = process.env.MQTT_TOPIC ?? "test/Device1_status";
 
 const HTTP_PORT = Number(process.env.PORT ?? 8080);
 
-const REFERENCE_PATH = process.env.SIDE_REFERENCE_PATH ?? path.resolve(__dirname, "../../data/side_reference.json");
+const REFERENCE_PATH = process.env.SIDE_REFERENCE_PATH ?? path.join(DATA_DIR, "side_reference.json");
 
 
 
@@ -219,7 +223,7 @@ function logClassification(parsed: ParsedMessage, classification: {
 
   const confidence = classification.side !== null && classification.confident ? " (confident)" : "";
 
-  console.log(`[mqtt] ${parsed.timestampText} | Side ${label}${confidence}`);
+  // console.log(`[mqtt] ${parsed.timestampText} | Side ${label}${confidence}`);
 
 }
 

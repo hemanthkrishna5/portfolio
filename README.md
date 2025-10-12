@@ -1,25 +1,18 @@
-Activity Tracker — Dev + Tunnel
+Activity Tracker — Local Development
 
-Quick steps to run the local dev server and expose it via Cloudflare Tunnel.
+Run the API + dashboard locally:
 
-Run locally (PowerShell)
+1. Install dependencies:
 
-1) Change into the app folder and install once:
+       cd activity_tracker
+       pnpm install
 
-    cd activity_tracker
-    pnpm install
+2. Start the dev processes (API + client + Vite proxy):
 
-2) Start the dev server first:
+       pnpm run dev
 
-    pnpm run dev
-
-The server listens on http://localhost:4000 by default.
-
-3) In a second PowerShell (also inside `activity_tracker`), run the tunnel:
-
-    cloudflared tunnel run activity-tracking
+The API serves on `http://localhost:4000`, and the React dashboard is proxied through Vite at `http://localhost:5173/activity-tracker/`.
 
 Notes
-- If you need a specific port, set it before step 2: `$env:PORT=4000`
-- Optional auth for write endpoints: `$env:BASIC_USER='user'; $env:BASIC_PASSWORD='yourpassword'`
-- Ensure your named tunnel `activity-tracking` exists and is configured in Cloudflare.
+- Change the API port with `PORT=4000 pnpm run dev`.
+- Set `ENABLE_BASIC_AUTH=1` (and `BASIC_USER`/`BASIC_PASSWORD`) to enforce credentials even in development.

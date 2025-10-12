@@ -118,6 +118,9 @@ importers:
       '@portfolio/timesheet-device-ui':
         specifier: workspace:*
         version: link:../timesheet_device
+      express:
+        specifier: ^5.1.0
+        version: 5.1.0
       framer-motion:
         specifier: ^12.23.22
         version: 12.23.22(@emotion/is-prop-valid@1.4.0)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)

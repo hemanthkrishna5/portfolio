@@ -4,6 +4,8 @@ import { motion } from 'framer-motion';
 
 
 export function Electronics() {
+  const iframeSrc = import.meta.env.VITE_TIMESHEET_IFRAME_URL ?? '/timesheet-app/';
+
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.5 }}>
       <Box>
@@ -15,7 +17,7 @@ export function Electronics() {
           The device streams its orientation data in real-time, and the dashboard below visualizes the current state.
         </Typography>
         <Paper elevation={3} sx={{ p: 2, mt: 4, background: 'none' }}>
-          <iframe src="/timesheet-app/" style={{ width: '100%', height: '600px', border: 'none' }} />
+          <iframe src={iframeSrc} style={{ width: '100%', height: '600px', border: 'none' }} />
         </Paper>
       </Box>
     </motion.div>

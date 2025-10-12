@@ -10,8 +10,11 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // --- Database path setup ---
+const DATA_DIR = process.env.TIMESHEET_DATA_DIR
+  ? path.resolve(process.env.TIMESHEET_DATA_DIR)
+  : path.resolve(__dirname, "../../data");
 const DATABASE_FILENAME = process.env.MQTT_DATABASE_FILE ?? "timesheet_device.db";
-const DATABASE_PATH = path.resolve(__dirname, "../../data", DATABASE_FILENAME);
+const DATABASE_PATH = path.resolve(DATA_DIR, DATABASE_FILENAME);
 
 fs.mkdirSync(path.dirname(DATABASE_PATH), { recursive: true });
 

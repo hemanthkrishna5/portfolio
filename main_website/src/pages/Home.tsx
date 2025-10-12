@@ -10,14 +10,25 @@ export function Home() {
 
   useEffect(() => {
     (async () => {
-      try {
-        const res = await fetch('https://activity.tesseract.sbs/public/steps', { credentials: 'omit' });
-        if (!res.ok) return;
-        const d = await res.json();
-        const n = (x: string | number) => Number(x || 0).toLocaleString();
-        setThisWeekSteps(n(d?.thisWeek?.steps ?? d?.week?.steps));
-        setLastWeekSteps(n(d?.lastWeek?.steps));
-      } catch (_) {}
+      const envEndpoint = import.meta.env.VITE_ACTIVITY_PUBLIC_URL;
+      const defaultEndpoint = 'https://activity.tesseract.sbs/public/steps';
+      const localEndpoint = import.meta.env.DEV ? 'http://localhost:4000/public/steps' : undefined;
+      const sources = [envEndpoint, localEndpoint, defaultEndpoint].filter(
+        (value): value is string => Boolean(value && value.length > 0)
+      );
+      for (const url of sources) {
+        try {
+          const res = await fetch(url, { credentials: 'omit' });
+          if (!res.ok) continue;
+          const d = await res.json();
+          const n = (x: string | number) => Number(x || 0).toLocaleString();
+          setThisWeekSteps(n(d?.thisWeek?.steps ?? d?.week?.steps));
+          setLastWeekSteps(n(d?.lastWeek?.steps));
+          return;
+        } catch {
+          // try next source
+        }
+      }
     })();
   }, []);
 
@@ -46,7 +57,7 @@ export function Home() {
                   </Typography>
                 </motion.div>
                 <motion.div variants={{ hidden: { opacity: 0, x: -20 }, visible: { opacity: 1, x: 0 } }}>
-                  <Button variant="contained" color="primary" href="https://activity.tesseract.sbs" target="_blank" rel="noopener" sx={{ mr: 2 }}>
+                  <Button variant="contained" color="primary" component={Link} to="/activity" sx={{ mr: 2 }}>
                     Open Activity Dashboard
                   </Button>
                   <Button variant="outlined" color="secondary" component={Link} to="/portfolio">
@@ -65,7 +76,7 @@ export function Home() {
                     <Typography variant="h5" component="div" sx={{ mt: 2 }}>Last week</Typography>
                     <Typography variant="h3" color="primary">{lastWeekSteps}</Typography>
                     <Typography color="text.secondary">Prev Mon → Sun</Typography>
-                    <Button size="small" href="https://activity.tesseract.sbs" target="_blank" rel="noopener" sx={{ mt: 2 }}>Live stats →</Button>
+                    <Button size="small" component={Link} to="/activity" sx={{ mt: 2 }}>Live stats →</Button>
                   </CardContent>
                 </Card>
               </motion.div>
@@ -82,7 +93,7 @@ export function Home() {
                 <BarChart sx={{ fontSize: 40, color: 'primary.main' }} />
                 <Typography variant="h5" component="div" sx={{ mt: 2 }}>🏃‍♂️ Activity tracker</Typography>
                 <Typography color="text.secondary" paragraph>Daily steps, active kcal, workouts — private dashboard behind auth.</Typography>
-                <Button size="small" href="https://activity.tesseract.sbs" target="_blank" rel="noopener">Open dashboard ↗</Button>
+                <Button size="small" component={Link} to="/activity">Open dashboard →</Button>
               </CardContent>
             </Card>
           </motion.div>
