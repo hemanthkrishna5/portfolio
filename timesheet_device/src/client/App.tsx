@@ -29,7 +29,6 @@ const LABELS_ENDPOINT = (() => {
 const ACTIVITY_LOG_ENDPOINT =
   (import.meta as any).env?.VITE_DEVICE_ACTIVITY_LOG_URL ?? '/api/activity-log'
 const ACTIVITY_SYNC_INTERVAL_MS = 5 * 60 * 1000
-const ACTIVITY_SYNC_DEBOUNCE_MS = 30 * 1000
 
 type RangeMode = 'week' | 'month' | 'custom'
 
@@ -352,17 +351,6 @@ export default function App() {
       return next
     })
   }, [])
-
-  useEffect(() => {
-    if (!hasLoadedRemoteLog) {
-      return
-    }
-    if (applyingRemoteLogRef.current) {
-      applyingRemoteLogRef.current = false
-      return
-    }
-    setPendingSync(true)
-  }, [activityLog, hasLoadedRemoteLog])
 
   const resetActivityState = useCallback(() => {
     timelineRef.current = createTimelineState()
@@ -961,8 +949,8 @@ export default function App() {
 
   const sourceTimestamp = latest?.imu_timestamp_text ?? latest?.imu_timestamp_iso ?? latest?.received_at ?? null
 
-  const syncActivityLog = useCallback(async () => {
-    if (!hasLoadedRemoteLog || !pendingSync) {
+  const syncActivityLog = useCallback(async (force = false) => {
+    if (!hasLoadedRemoteLog || (!pendingSync && !force)) {
       return
     }
     try {
@@ -981,17 +969,16 @@ export default function App() {
   }, [activityLog, hasLoadedRemoteLog, pendingSync])
 
   useEffect(() => {
-    if (!hasLoadedRemoteLog || !pendingSync) {
+    if (!hasLoadedRemoteLog) {
       return
     }
-    if (typeof window === 'undefined') {
+    if (applyingRemoteLogRef.current) {
+      applyingRemoteLogRef.current = false
       return
     }
-    const timeoutId = window.setTimeout(() => {
-      void syncActivityLog()
-    }, ACTIVITY_SYNC_DEBOUNCE_MS)
-    return () => window.clearTimeout(timeoutId)
-  }, [hasLoadedRemoteLog, pendingSync, syncActivityLog])
+    setPendingSync(true)
+    void syncActivityLog(true)
+  }, [activityLog, hasLoadedRemoteLog, syncActivityLog])
 
   useEffect(() => {
     if (!hasLoadedRemoteLog) {
@@ -1023,7 +1010,7 @@ export default function App() {
           console.warn('[activity-log] sendBeacon flush failed', error)
         }
       }
-      void syncActivityLog()
+      void syncActivityLog(true)
     }
     window.addEventListener('pagehide', handleImmediateFlush)
     window.addEventListener('beforeunload', handleImmediateFlush)
