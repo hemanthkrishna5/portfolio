@@ -100,6 +100,36 @@ export function Activity() {
     setNeedsAuth(false);
   }, [activityApiUrl]);
 
+  const handleAuthSubmit = useCallback(
+    (event) => {
+      event.preventDefault();
+      if (!authUsernameInput || !authPasswordInput) {
+        setAuthFormError('Username and password are required.');
+        return;
+      }
+      try {
+        const token = typeof window !== 'undefined'
+          ? window.btoa(`${authUsernameInput}:${authPasswordInput}`)
+          : Buffer.from(`${authUsernameInput}:${authPasswordInput}`).toString('base64');
+        setAuth({ token, username: authUsernameInput });
+        setAuthFormError(null);
+        setNeedsAuth(false);
+        setAuthForm((prev) => ({ ...prev, password: '' }));
+        setError(null);
+      } catch (encodingError) {
+        console.error('Failed to encode credentials', encodingError);
+        setAuthFormError('Unable to encode credentials. Please retry.');
+      }
+    },
+    [authPasswordInput, authUsernameInput],
+  );
+
+  const handleSignOut = useCallback(() => {
+    setAuth(null);
+    setAuthForm({ username: '', password: '' });
+    setNeedsAuth(true);
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -366,32 +396,3 @@ export function Activity() {
     </motion.div>
   );
 }
-  const handleAuthSubmit = useCallback(
-    (event) => {
-      event.preventDefault();
-      if (!authUsernameInput || !authPasswordInput) {
-        setAuthFormError('Username and password are required.');
-        return;
-      }
-      try {
-        const token = typeof window !== 'undefined'
-          ? window.btoa(`${authUsernameInput}:${authPasswordInput}`)
-          : Buffer.from(`${authUsernameInput}:${authPasswordInput}`).toString('base64');
-        setAuth({ token, username: authUsernameInput });
-        setAuthFormError(null);
-        setNeedsAuth(false);
-        setAuthForm((prev) => ({ ...prev, password: '' }));
-        setError(null);
-      } catch (encodingError) {
-        console.error('Failed to encode credentials', encodingError);
-        setAuthFormError('Unable to encode credentials. Please retry.');
-      }
-    },
-    [authPasswordInput, authUsernameInput],
-  );
-
-  const handleSignOut = useCallback(() => {
-    setAuth(null);
-    setAuthForm({ username: '', password: '' });
-    setNeedsAuth(true);
-  }, []);
