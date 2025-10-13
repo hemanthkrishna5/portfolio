@@ -68,6 +68,8 @@ interface DateGroup {
   totalMs: number
 }
 
+type SaveNotice = { type: 'success' | 'error'; message: string } | null
+
 const normalizeActivityLog = (raw: unknown): ActivityLogMap => {
   const normalized: ActivityLogMap = {}
   if (!raw || typeof raw !== 'object') {
@@ -315,11 +317,14 @@ export default function App() {
   const [customStart, setCustomStart] = useState<string>(toDateKey(Date.now()))
   const [customEnd, setCustomEnd] = useState<string>(toDateKey(Date.now()))
   const [downloadError, setDownloadError] = useState<string | null>(null)
+  const [isSaving, setIsSaving] = useState(false)
+  const [saveNotice, setSaveNotice] = useState<SaveNotice>(null)
   const [labels, setLabels] = useState<Record<number, string>>(() => loadStoredLabels())
 
   const labelsRef = useRef(labels)
   const suppressLabelBroadcastRef = useRef(false)
   const labelSaveTimeoutsRef = useRef<Record<number, number | null>>({})
+  const saveNoticeTimeoutRef = useRef<number | null>(null)
   const timelineRef = useRef<TimelineState>(createTimelineState())
   const [historyReady, setHistoryReady] = useState(false)
   const [hasLoadedRemoteLog, setHasLoadedRemoteLog] = useState(false)
@@ -468,6 +473,9 @@ export default function App() {
       if (typeof timeoutId === 'number') {
         window.clearTimeout(timeoutId)
       }
+    }
+    if (saveNoticeTimeoutRef.current !== null) {
+      window.clearTimeout(saveNoticeTimeoutRef.current)
     }
   }, [])
 
@@ -949,9 +957,9 @@ export default function App() {
 
   const sourceTimestamp = latest?.imu_timestamp_text ?? latest?.imu_timestamp_iso ?? latest?.received_at ?? null
 
-  const syncActivityLog = useCallback(async (force = false) => {
+  const syncActivityLog = useCallback(async (force = false): Promise<boolean> => {
     if (!hasLoadedRemoteLog || (!pendingSync && !force)) {
-      return
+      return false
     }
     try {
       const response = await fetch(ACTIVITY_LOG_ENDPOINT, {
@@ -963,10 +971,41 @@ export default function App() {
         throw new Error(`Activity log sync failed with status ${response.status}`)
       }
       setPendingSync(false)
+      return true
     } catch (error) {
       console.warn('[activity-log] failed to sync activity log', error)
+      return false
     }
   }, [activityLog, hasLoadedRemoteLog, pendingSync])
+
+  const handleManualSave = useCallback(async () => {
+    if (isSaving) {
+      return
+    }
+    if (!hasLoadedRemoteLog) {
+      setSaveNotice({ type: 'error', message: 'Activity log is still loading. Please try again shortly.' })
+      return
+    }
+    setIsSaving(true)
+    setSaveNotice(null)
+    if (typeof window !== 'undefined' && saveNoticeTimeoutRef.current !== null) {
+      window.clearTimeout(saveNoticeTimeoutRef.current)
+      saveNoticeTimeoutRef.current = null
+    }
+    const success = await syncActivityLog(true)
+    if (success) {
+      setSaveNotice({ type: 'success', message: 'Activity log saved.' })
+      if (typeof window !== 'undefined') {
+        saveNoticeTimeoutRef.current = window.setTimeout(() => {
+          setSaveNotice(null)
+          saveNoticeTimeoutRef.current = null
+        }, 4000)
+      }
+    } else {
+      setSaveNotice({ type: 'error', message: 'Unable to save activity log. Please try again.' })
+    }
+    setIsSaving(false)
+  }, [hasLoadedRemoteLog, isSaving, syncActivityLog])
 
   useEffect(() => {
     if (!hasLoadedRemoteLog) {
@@ -1110,11 +1149,22 @@ export default function App() {
               </label>
             </>
           ) : null}
-          <button type="button" className="download-button" onClick={handleDownloadCsv}>
+          <button type="button" className="download-button push-right" onClick={handleDownloadCsv}>
             Download CSV
+          </button>
+          <button
+            type="button"
+            className="download-button save-button"
+            onClick={handleManualSave}
+            disabled={isSaving}
+          >
+            {isSaving ? 'Saving...' : 'Save Changes'}
           </button>
         </div>
         {downloadError ? <p className="error-text">{downloadError}</p> : null}
+        {saveNotice ? (
+          <p className={saveNotice.type === 'error' ? 'error-text' : 'success-text'}>{saveNotice.message}</p>
+        ) : null}
         {dateGroups.length === 0 ? (
           <p className="placeholder-text">No activity recorded yet.</p>
         ) : (
