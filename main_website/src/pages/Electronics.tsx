@@ -12,7 +12,10 @@ const HISTORY_ENDPOINT =
   import.meta.env.VITE_DEVICE_HISTORY_URL ?? 'https://device.tesseract.sbs/api/imu/history';
 const TOTAL_SIDES = 12;
 const POLL_INTERVAL_MS = 1000;
-const LABEL_STORAGE_KEY = 'dodeca-labels';
+const LABEL_STORAGE_KEY = 'dodec-labels';
+const LEGACY_LABEL_KEYS = ['dodeca-labels'];
+const LABEL_MESSAGE_UPDATE = 'DODEC_LABEL_UPDATE';
+const LABEL_MESSAGE_REQUEST = 'DODEC_LABELS_REQUEST';
 const HISTORY_LIMIT = Number.parseInt(import.meta.env.VITE_DEVICE_HISTORY_LIMIT ?? '1200', 10);
 const DURATION_TICK_MS = 1000;
 const DEFAULT_LABEL_PREFIX = 'Side';
@@ -60,24 +63,46 @@ const loadStoredLabels = (): Record<number, string> => {
   if (typeof window === 'undefined') {
     return createEmptyLabels();
   }
-  try {
-    const raw = window.localStorage.getItem(LABEL_STORAGE_KEY);
-    if (!raw) {
-      return createEmptyLabels();
-    }
-    const parsed = JSON.parse(raw) as Record<string, string>;
-    const merged = createEmptyLabels();
-    for (const [key, value] of Object.entries(parsed)) {
-      const numericSide = Number(key);
-      if (Number.isFinite(numericSide) && numericSide >= 1 && numericSide <= TOTAL_SIDES) {
-        merged[numericSide] = String(value ?? '');
+
+  const readFromKey = (key: string): Record<number, string> | null => {
+    try {
+      const raw = window.localStorage.getItem(key);
+      if (!raw) {
+        return null;
       }
+      const parsed = JSON.parse(raw) as Record<string, string>;
+      const merged = createEmptyLabels();
+      for (const [entryKey, value] of Object.entries(parsed)) {
+        const numericSide = Number(entryKey);
+        if (Number.isFinite(numericSide) && numericSide >= 1 && numericSide <= TOTAL_SIDES) {
+          merged[numericSide] = String(value ?? '');
+        }
+      }
+      return merged;
+    } catch (storageError) {
+      console.warn('Unable to read stored labels', storageError);
+      return null;
     }
-    return merged;
-  } catch (storageError) {
-    console.warn('Unable to read stored labels', storageError);
-    return createEmptyLabels();
+  };
+
+  const primary = readFromKey(LABEL_STORAGE_KEY);
+  if (primary) {
+    return primary;
   }
+
+  for (const legacyKey of LEGACY_LABEL_KEYS) {
+    const legacy = readFromKey(legacyKey);
+    if (legacy) {
+      try {
+        window.localStorage.setItem(LABEL_STORAGE_KEY, JSON.stringify(legacy));
+      } catch {
+        // ignore write errors
+      }
+      return legacy;
+    }
+  }
+
+  return createEmptyLabels();
 };
 
 export function Electronics() {
@@ -95,15 +120,48 @@ export function Electronics() {
   const [nowTick, setNowTick] = useState(() => Date.now());
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const iframeOriginRef = useRef<string | null>(null);
   const [iframeHeight, setIframeHeight] = useState<number>(720);
   const faceOrder = useMemo(() => parseFaceOrder(import.meta.env.VITE_DODECA_FACE_ORDER), []);
+
+  const postLabelsToIframe = useCallback(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    const targetWindow = iframeRef.current?.contentWindow;
+    if (!targetWindow) {
+      return;
+    }
+    const origin = iframeOriginRef.current ?? '*';
+    targetWindow.postMessage({ type: LABEL_MESSAGE_UPDATE, labels }, origin);
+  }, [labels]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
       return;
     }
-    window.localStorage.setItem(LABEL_STORAGE_KEY, JSON.stringify(labels));
+    try {
+      const resolved = new URL(iframeSrc, window.location.href).origin;
+      iframeOriginRef.current = resolved;
+    } catch {
+      iframeOriginRef.current = '*';
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    const serialized = JSON.stringify(labels);
+    window.localStorage.setItem(LABEL_STORAGE_KEY, serialized);
+    for (const legacyKey of LEGACY_LABEL_KEYS) {
+      window.localStorage.setItem(legacyKey, serialized);
+    }
   }, [labels]);
+
+  useEffect(() => {
+    postLabelsToIframe();
+  }, [postLabelsToIframe]);
 
   useEffect(() => {
     const onMessage = (ev: MessageEvent) => {
@@ -111,11 +169,17 @@ export function Electronics() {
         // Cap to a sensible min/max to avoid layout jumps
         const h = Math.max(320, Math.min(ev.data.height, 4000));
         setIframeHeight(h);
+      } else if (ev?.data && ev.data.type === LABEL_MESSAGE_REQUEST) {
+        const expectedOrigin = iframeOriginRef.current;
+        if (expectedOrigin && expectedOrigin !== '*' && ev.origin !== expectedOrigin) {
+          return;
+        }
+        postLabelsToIframe();
       }
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, []);
+  }, [postLabelsToIframe]);
 
   useEffect(() => {
     let cancelled = false;
@@ -241,6 +305,8 @@ export function Electronics() {
     : activeDurationMs !== null
       ? formatDuration(activeDurationMs)
       : '—';
+  const latestTimestampText = useMemo(() => formatTimestampDisplay(latest), [latest]);
+  const currentActivityText = activeLabel ?? 'Waiting for device…';
   const currentLabelValue = activeSide !== null ? labels[activeSide] ?? '' : '';
   const labelPlaceholder = activeSide !== null ? `${DEFAULT_LABEL_PREFIX} ${activeSide}` : 'Waiting for device…';
 
@@ -257,6 +323,10 @@ export function Electronics() {
     },
     [activeSide],
   );
+
+  const handleIframeLoad = useCallback(() => {
+    postLabelsToIframe();
+  }, [postLabelsToIframe]);
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.5 }}>
@@ -306,6 +376,18 @@ export function Electronics() {
               </Typography>
               <Typography variant="body2" sx={{ color: '#8ea0bb' }}>
                 {activeSide !== null ? `Editing ${activeLabel}` : 'Waiting for device signal…'}
+              </Typography>
+              <Typography variant="body2" sx={{ color: '#8ea0bb' }}>
+                Latest IMU update:{' '}
+                <Typography component="span" variant="body2" sx={{ color: '#fff' }}>
+                  {latestTimestampText}
+                </Typography>
+              </Typography>
+              <Typography variant="body2" sx={{ color: '#8ea0bb' }}>
+                Current activity:{' '}
+                <Typography component="span" variant="body2" sx={{ color: '#fff' }}>
+                  {currentActivityText}
+                </Typography>
               </Typography>
               <TextField
                 label="Custom label"
@@ -362,6 +444,7 @@ export function Electronics() {
               src={iframeSrc}
               title="Timesheet device dashboard"
               loading="lazy"
+              onLoad={handleIframeLoad}
               style={{
                 display: 'block',
                 width: '100%',
@@ -607,6 +690,24 @@ function formatDuration(ms: number): string {
     return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
   }
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
+function formatTimestampDisplay(latest: LatestReadingResponse | null): string {
+  if (!latest) {
+    return 'Waiting for device…';
+  }
+  const candidates = [latest.imu_timestamp_iso, latest.imu_timestamp_text, latest.received_at];
+  for (const value of candidates) {
+    if (!value) {
+      continue;
+    }
+    const normalized = value.includes(' ') && !value.includes('T') ? value.replace(' ', 'T') : value;
+    const parsed = Date.parse(normalized);
+    if (!Number.isNaN(parsed)) {
+      return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'medium' }).format(new Date(parsed));
+    }
+  }
+  return 'Waiting for device…';
 }
 
 function createDodecahedronData(faceOrder?: number[] | undefined): DodecahedronData {

@@ -6,9 +6,12 @@ const HISTORY_ENDPOINT = '/api/imu/history'
 const TOTAL_SIDES = 12
 const POLL_INTERVAL_MS = 1000
 const LABEL_STORAGE_KEY = 'dodec-labels'
+const LEGACY_LABEL_KEYS = ['dodeca-labels']
 const ACTIVITY_LOG_STORAGE_KEY = 'dodec-activity-log'
 const DEFAULT_LABEL_PREFIX = 'Side'
 const DAY_MS = 24 * 60 * 60 * 1000
+const LABEL_MESSAGE_UPDATE = 'DODEC_LABEL_UPDATE'
+const LABEL_MESSAGE_REQUEST = 'DODEC_LABELS_REQUEST'
 
 type RangeMode = 'week' | 'month' | 'custom'
 
@@ -33,7 +36,7 @@ interface TimelineState {
 
 interface EditingState {
   dateKey: string
-  label: string
+  originalLabel: string
 }
 
 interface DateGroup {
@@ -50,6 +53,52 @@ const createEmptyLabels = (): Record<number, string> => {
     result[side] = ''
   }
   return result
+}
+
+const loadStoredLabels = (): Record<number, string> => {
+  if (typeof window === 'undefined') {
+    return createEmptyLabels()
+  }
+
+  const readFromKey = (key: string): Record<number, string> | null => {
+    try {
+      const raw = window.localStorage.getItem(key)
+      if (!raw) {
+        return null
+      }
+      const parsed = JSON.parse(raw) as Record<string, string>
+      const base = createEmptyLabels()
+      for (const [entryKey, value] of Object.entries(parsed)) {
+        const numericSide = Number(entryKey)
+        if (Number.isFinite(numericSide) && numericSide >= 1 && numericSide <= TOTAL_SIDES) {
+          base[numericSide] = String(value ?? '')
+        }
+      }
+      return base
+    } catch (error) {
+      console.warn('Unable to read stored labels', error)
+      return null
+    }
+  }
+
+  const primary = readFromKey(LABEL_STORAGE_KEY)
+  if (primary) {
+    return primary
+  }
+
+  for (const legacyKey of LEGACY_LABEL_KEYS) {
+    const legacy = readFromKey(legacyKey)
+    if (legacy) {
+      try {
+        window.localStorage.setItem(LABEL_STORAGE_KEY, JSON.stringify(legacy))
+      } catch {
+        // ignore write issues for legacy data
+      }
+      return legacy
+    }
+  }
+
+  return createEmptyLabels()
 }
 
 const createTimelineState = (): TimelineState => ({
@@ -189,38 +238,18 @@ export default function App() {
     }
   })
   const [editing, setEditing] = useState<EditingState | null>(null)
-  const [editingValue, setEditingValue] = useState<string>('')
+  const [editingDurationValue, setEditingDurationValue] = useState<string>('')
+  const [editingLabelValue, setEditingLabelValue] = useState<string>('')
   const [editError, setEditError] = useState<string | null>(null)
   const [expandedDates, setExpandedDates] = useState<string[]>(() => [toDateKey(Date.now())])
   const [rangeMode, setRangeMode] = useState<RangeMode>('week')
   const [customStart, setCustomStart] = useState<string>(toDateKey(Date.now()))
   const [customEnd, setCustomEnd] = useState<string>(toDateKey(Date.now()))
   const [downloadError, setDownloadError] = useState<string | null>(null)
-
-  const [labels, setLabels] = useState<Record<number, string>>(() => {
-    if (typeof window === 'undefined') {
-      return createEmptyLabels()
-    }
-    try {
-      const stored = window.localStorage.getItem(LABEL_STORAGE_KEY)
-      if (stored) {
-        const parsed = JSON.parse(stored) as Record<string, string>
-        const merged = createEmptyLabels()
-        for (const [side, value] of Object.entries(parsed)) {
-          const numericSide = Number(side)
-          if (Number.isFinite(numericSide) && numericSide >= 1 && numericSide <= TOTAL_SIDES) {
-            merged[numericSide] = String(value)
-          }
-        }
-        return merged
-      }
-    } catch (storageError) {
-      console.warn('Unable to read stored labels', storageError)
-    }
-    return createEmptyLabels()
-  })
+  const [labels, setLabels] = useState<Record<number, string>>(() => loadStoredLabels())
 
   const labelsRef = useRef(labels)
+  const suppressLabelBroadcastRef = useRef(false)
   const timelineRef = useRef<TimelineState>(createTimelineState())
   const [historyReady, setHistoryReady] = useState(false)
 
@@ -294,8 +323,16 @@ export default function App() {
   useEffect(() => {
     labelsRef.current = labels
     if (typeof window !== 'undefined') {
-      window.localStorage.setItem(LABEL_STORAGE_KEY, JSON.stringify(labels))
+      const serialized = JSON.stringify(labels)
+      window.localStorage.setItem(LABEL_STORAGE_KEY, serialized)
+      for (const legacyKey of LEGACY_LABEL_KEYS) {
+        window.localStorage.setItem(legacyKey, serialized)
+      }
+      if (!suppressLabelBroadcastRef.current && window.parent && window.parent !== window) {
+        window.parent.postMessage({ type: LABEL_MESSAGE_UPDATE, labels }, '*')
+      }
     }
+    suppressLabelBroadcastRef.current = false
     const state = timelineRef.current
     if (state.lastSide !== null) {
       state.currentLabel = resolveLabel(labels, state.lastSide)
@@ -307,6 +344,48 @@ export default function App() {
       window.localStorage.setItem(ACTIVITY_LOG_STORAGE_KEY, JSON.stringify(activityLog))
     }
   }, [activityLog])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    const handleMessage = (event: MessageEvent) => {
+      const data = event?.data
+      if (!data || typeof data !== 'object') {
+        return
+      }
+
+      if (data.type === LABEL_MESSAGE_UPDATE && data.labels && typeof data.labels === 'object') {
+        suppressLabelBroadcastRef.current = true
+        const incoming = data.labels as Record<string, unknown>
+        setLabels((prev) => {
+          const next = { ...prev }
+          for (const [key, value] of Object.entries(incoming)) {
+            const numericSide = Number(key)
+            if (!Number.isFinite(numericSide) || numericSide < 1 || numericSide > TOTAL_SIDES) {
+              continue
+            }
+            next[numericSide] = typeof value === 'string' ? value : ''
+          }
+          return { ...next }
+        })
+      } else if (data.type === LABEL_MESSAGE_REQUEST) {
+        if (window.parent && window.parent !== window) {
+          window.parent.postMessage({ type: LABEL_MESSAGE_UPDATE, labels: labelsRef.current }, event.origin || '*')
+        }
+      }
+    }
+
+    window.addEventListener('message', handleMessage)
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({ type: LABEL_MESSAGE_REQUEST }, '*')
+    }
+
+    return () => {
+      window.removeEventListener('message', handleMessage)
+    }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -478,18 +557,24 @@ export default function App() {
       setEditError('Stop the current activity before editing it.')
       return
     }
-    setEditing({ dateKey, label })
-    setEditingValue(formatDurationForInput(totalMs))
+    setEditing({ dateKey, originalLabel: label })
+    setEditingDurationValue(formatDurationForInput(totalMs))
+    setEditingLabelValue(label)
     setEditError(null)
   }, [activeDateKey])
 
-  const handleEditChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
-    setEditingValue(event.target.value)
+  const handleEditDurationChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
+    setEditingDurationValue(event.target.value)
+  }, [])
+
+  const handleEditLabelChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
+    setEditingLabelValue(event.target.value)
   }, [])
 
   const handleEditCancel = useCallback(() => {
     setEditing(null)
-    setEditingValue('')
+    setEditingDurationValue('')
+    setEditingLabelValue('')
     setEditError(null)
   }, [])
 
@@ -497,13 +582,18 @@ export default function App() {
     if (!editing) {
       return
     }
-    const { dateKey, label } = editing
-    const parsedMs = parseDurationInput(editingValue)
+    const { dateKey, originalLabel } = editing
+    const parsedMs = parseDurationInput(editingDurationValue)
     if (!Number.isFinite(parsedMs)) {
       setEditError('Please enter duration as mm:ss, hh:mm:ss, or minutes.')
       return
     }
-    const activeContribution = getActiveContribution(dateKey, label)
+    const normalizedLabel = editingLabelValue.trim()
+    if (normalizedLabel.length === 0) {
+      setEditError('Activity name cannot be empty.')
+      return
+    }
+    const activeContribution = getActiveContribution(dateKey, originalLabel)
     if (parsedMs < activeContribution) {
       setEditError(`Duration cannot be less than the active segment (${formatDuration(activeContribution)}).`)
       return
@@ -512,10 +602,11 @@ export default function App() {
     setActivityLog((prev) => {
       const next: ActivityLogMap = { ...prev }
       const entry = { ...(next[dateKey] ?? {}) }
-      if (storedMs <= 0) {
-        delete entry[label]
-      } else {
-        entry[label] = storedMs
+      if (originalLabel in entry) {
+        delete entry[originalLabel]
+      }
+      if (storedMs > 0) {
+        entry[normalizedLabel] = (entry[normalizedLabel] ?? 0) + storedMs
       }
       if (Object.keys(entry).length === 0) {
         delete next[dateKey]
@@ -525,9 +616,10 @@ export default function App() {
       return next
     })
     setEditing(null)
-    setEditingValue('')
+    setEditingDurationValue('')
+    setEditingLabelValue('')
     setEditError(null)
-  }, [editing, editingValue])
+  }, [editing, editingDurationValue, editingLabelValue, getActiveContribution])
 
   const handleDelete = useCallback(
     (dateKey: string, label: string) => {
@@ -551,9 +643,10 @@ export default function App() {
         }
         return next
       })
-      if (editing && editing.dateKey === dateKey && editing.label === label) {
+      if (editing && editing.dateKey === dateKey && editing.originalLabel === label) {
         setEditing(null)
-        setEditingValue('')
+        setEditingDurationValue('')
+        setEditingLabelValue('')
       }
       setEditError(null)
     },
@@ -733,18 +826,30 @@ export default function App() {
                     </thead>
                     <tbody>
                       {rows.map((row) => {
-                        const isEditing = editing?.dateKey === dateKey && editing.label === row.label
+                        const isEditing = editing?.dateKey === dateKey && editing.originalLabel === row.label
                         const isLocked = state.currentLabel === row.label && dateKey === activeDateKey
                         return (
                           <tr key={`${dateKey}-${row.label}`}>
-                            <td>{row.label}</td>
                             <td>
                               {isEditing ? (
                                 <input
                                   type="text"
                                   className="duration-input"
-                                  value={editingValue}
-                                  onChange={handleEditChange}
+                                  value={editingLabelValue}
+                                  onChange={handleEditLabelChange}
+                                  placeholder="Activity name"
+                                />
+                              ) : (
+                                <span>{row.label}</span>
+                              )}
+                            </td>
+                            <td>
+                              {isEditing ? (
+                                <input
+                                  type="text"
+                                  className="duration-input"
+                                  value={editingDurationValue}
+                                  onChange={handleEditDurationChange}
                                   placeholder="mm:ss or hh:mm:ss"
                                 />
                               ) : (
