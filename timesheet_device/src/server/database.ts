@@ -60,6 +60,13 @@ db.exec(`
   )
 `);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS activity_log_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  )
+`);
+
 db.exec("CREATE INDEX IF NOT EXISTS idx_imu_readings_side ON imu_readings(side)");
 
 type PersistArgs = {
@@ -225,6 +232,11 @@ export function getDatabasePath(): string {
 
 export type PersistedActivityLog = Record<string, Record<string, { totalMs: number; side: number | null }>>;
 
+export type ActivityLogSnapshot = {
+  entries: PersistedActivityLog;
+  historyCutoffIso: string | null;
+};
+
 type ActivityLogRow = {
   date_key: string;
   label: string;
@@ -248,7 +260,17 @@ const upsertActivityLogStatement = db.prepare(`
     updated_at = CURRENT_TIMESTAMP
 `);
 
-export function getActivityLog(): PersistedActivityLog {
+const getMetaStatement = db.prepare(`
+  SELECT value FROM activity_log_meta WHERE key = ?
+`);
+
+const upsertMetaStatement = db.prepare(`
+  INSERT INTO activity_log_meta (key, value)
+  VALUES (?, ?)
+  ON CONFLICT(key) DO UPDATE SET value = excluded.value
+`);
+
+export function getActivityLog(): ActivityLogSnapshot {
   const rows = selectActivityLogStatement.all() as ActivityLogRow[];
   const result: PersistedActivityLog = {};
   for (const row of rows) {
@@ -267,11 +289,12 @@ export function getActivityLog(): PersistedActivityLog {
     }
     result[dateKey]![label] = { totalMs, side };
   }
-  return result;
+  return { entries: result, historyCutoffIso: getActivityLogHistoryCutoff() };
 }
 
-const replaceActivityLogTxn = db.transaction((entries: PersistedActivityLog) => {
+const replaceActivityLogTxn = db.transaction((entries: PersistedActivityLog): PersistedActivityLog => {
   clearActivityLogStatement.run();
+  const sanitized: PersistedActivityLog = {};
   for (const [dateKey, perLabel] of Object.entries(entries)) {
     if (typeof dateKey !== "string" || dateKey.length === 0 || !perLabel || typeof perLabel !== "object") {
       continue;
@@ -288,12 +311,47 @@ const replaceActivityLogTxn = db.transaction((entries: PersistedActivityLog) => 
         continue;
       }
       upsertActivityLogStatement.run(dateKey, label, totalMs, side);
+      if (!sanitized[dateKey]) {
+        sanitized[dateKey] = {};
+      }
+      sanitized[dateKey]![label] = { totalMs, side };
     }
   }
+  return sanitized;
 });
 
-export function replaceActivityLog(entries: PersistedActivityLog): void {
-  replaceActivityLogTxn(entries);
+const HISTORY_CUTOFF_KEY = "history_cutoff_iso";
+
+function computeHistoryCutoffIso(): string {
+  const latest = getLatestReading();
+  const iso = latest?.received_at ?? latest?.imu_timestamp_iso ?? new Date().toISOString();
+  return typeof iso === "string" && iso.length > 0 ? iso : new Date().toISOString();
+}
+
+function setActivityLogHistoryCutoff(value: string): void {
+  upsertMetaStatement.run(HISTORY_CUTOFF_KEY, value);
+}
+
+export function getActivityLogHistoryCutoff(): string | null {
+  const row = getMetaStatement.get(HISTORY_CUTOFF_KEY) as { value?: unknown } | undefined;
+  if (!row) {
+    return null;
+  }
+  return typeof row.value === "string" && row.value.length > 0 ? row.value : null;
+}
+
+export function replaceActivityLog(entries: PersistedActivityLog): ActivityLogSnapshot {
+  const sanitized = replaceActivityLogTxn(entries);
+  const cutoff = computeHistoryCutoffIso();
+  setActivityLogHistoryCutoff(cutoff);
+  return { entries: sanitized, historyCutoffIso: cutoff };
+}
+
+export function clearActivityLog(): ActivityLogSnapshot {
+  clearActivityLogStatement.run();
+  const cutoff = new Date().toISOString();
+  setActivityLogHistoryCutoff(cutoff);
+  return { entries: {}, historyCutoffIso: cutoff };
 }
 
 interface HistoryOptions {

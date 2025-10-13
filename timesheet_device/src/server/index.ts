@@ -17,7 +17,9 @@ import {
   setLabel,
   getActivityLog,
   replaceActivityLog,
-  type PersistedActivityLog
+  clearActivityLog,
+  type PersistedActivityLog,
+  type ActivityLogSnapshot
 } from "./database.js";
 import { parsePayload } from "./parser.js";
 import { classifyVector, loadProfiles } from "./profiles.js";
@@ -187,8 +189,8 @@ function startHttpServer(): void {
   });
 
   app.get("/api/activity-log", (_request, response) => {
-    const entries = getActivityLog();
-    response.json({ entries });
+    const snapshot = getActivityLog();
+    response.json(snapshot);
   });
 
   app.put("/api/activity-log", (request, response) => {
@@ -199,11 +201,21 @@ function startHttpServer(): void {
     }
 
     try {
-      replaceActivityLog(payload.entries as PersistedActivityLog);
-      response.json({ status: "ok" });
+      const persisted = replaceActivityLog(payload.entries as PersistedActivityLog);
+      response.json({ status: "ok", ...persisted });
     } catch (error) {
       console.error("[http] failed to persist activity log", error);
       response.status(500).json({ error: "activity_log_persist_failed" });
+    }
+  });
+
+  app.delete("/api/activity-log", (_request, response) => {
+    try {
+      const snapshot = clearActivityLog();
+      response.json({ status: "ok", ...snapshot });
+    } catch (error) {
+      console.error("[http] failed to clear activity log", error);
+      response.status(500).json({ error: "activity_log_clear_failed" });
     }
   });
 

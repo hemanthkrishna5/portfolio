@@ -319,6 +319,7 @@ export default function App() {
   const [customEnd, setCustomEnd] = useState<string>(toDateKey(Date.now()))
   const [downloadError, setDownloadError] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
+  const [isClearing, setIsClearing] = useState(false)
   const [saveNotice, setSaveNotice] = useState<SaveNotice>(null)
   const [labels, setLabels] = useState<Record<number, string>>(() => loadStoredLabels())
 
@@ -334,6 +335,9 @@ export default function App() {
   const skipRemoteLoadRef = useRef(false)
   const remoteLogRequestIdRef = useRef(0)
   const applyingRemoteLogRef = useRef(false)
+  const historyCutoffRef = useRef<string | null>(null)
+  const [historyCursorReady, setHistoryCursorReady] = useState(false)
+  const replayingHistoryRef = useRef(false)
 
   const markPendingSync = useCallback(() => {
     if (!pendingSyncRef.current) {
@@ -354,7 +358,8 @@ export default function App() {
       setActivityLog((prev) => {
         const next = updater(prev)
         activityLogRef.current = next
-        if ((options?.markDirty ?? true) && next !== prev) {
+        const shouldMarkDirty = (options?.markDirty ?? true) && !replayingHistoryRef.current
+        if (shouldMarkDirty && next !== prev) {
           if (!hasLoadedRemoteLog) {
             skipRemoteLoadRef.current = true
           }
@@ -375,7 +380,12 @@ export default function App() {
       if (!response.ok) {
         throw new Error(`Activity log request failed with status ${response.status}`)
       }
-      const payload = (await response.json()) as { entries?: unknown }
+      const payload = (await response.json()) as { entries?: unknown; historyCutoffIso?: unknown }
+      const historyCutoffIso =
+        typeof payload?.historyCutoffIso === 'string' && payload.historyCutoffIso.length > 0
+          ? payload.historyCutoffIso
+          : null
+      historyCutoffRef.current = historyCutoffIso
       if (requestId !== remoteLogRequestIdRef.current) {
         return false
       }
@@ -411,6 +421,9 @@ export default function App() {
     if (endMs <= startMs) {
       return
     }
+    if (replayingHistoryRef.current) {
+      return
+    }
     applyActivityLogUpdate((prev) => {
       const next: ActivityLogMap = { ...prev }
       let cursor = startMs
@@ -431,12 +444,15 @@ export default function App() {
       }
       return next
     })
-  }, [applyActivityLogUpdate])
+  }, [applyActivityLogUpdate, replayingHistoryRef])
 
   const resetActivityState = useCallback(() => {
     timelineRef.current = createTimelineState()
+    if (replayingHistoryRef.current) {
+      return
+    }
     applyActivityLogUpdate(() => ({}))
-  }, [applyActivityLogUpdate])
+  }, [applyActivityLogUpdate, replayingHistoryRef])
 
   const handleReading = useCallback(
     (payload: LatestReadingResponse) => {
@@ -517,6 +533,10 @@ export default function App() {
           console.warn('[activity-log] failed to load activity log from server', error)
           skipRemoteLoadRef.current = false
           setHasLoadedRemoteLog(true)
+        }
+      } finally {
+        if (!cancelled) {
+          setHistoryCursorReady(true)
         }
       }
     }
@@ -628,11 +648,19 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    if (!historyCursorReady) {
+      return
+    }
     let cancelled = false
-
     const loadHistory = async () => {
+      replayingHistoryRef.current = true
       try {
-        const response = await fetch(`${HISTORY_ENDPOINT}?limit=5000`, { cache: 'no-store' })
+        const params = new URLSearchParams({ limit: '5000' })
+        const cursor = historyCutoffRef.current
+        if (cursor) {
+          params.set('since', cursor)
+        }
+        const response = await fetch(`${HISTORY_ENDPOINT}?${params.toString()}`, { cache: 'no-store' })
         if (!response.ok) {
           throw new Error(`History request failed with status ${response.status}`)
         }
@@ -667,6 +695,7 @@ export default function App() {
           setError(err instanceof Error ? err.message : 'Unknown error while loading history')
         }
       } finally {
+        replayingHistoryRef.current = false
         if (!cancelled) {
           setHistoryReady(true)
         }
@@ -678,7 +707,7 @@ export default function App() {
     return () => {
       cancelled = true
     }
-  }, [handleReading, resetActivityState])
+  }, [handleReading, historyCursorReady, resetActivityState])
 
   useEffect(() => {
     if (!historyReady) {
@@ -1026,30 +1055,8 @@ export default function App() {
 
   const sourceTimestamp = latest?.imu_timestamp_text ?? latest?.imu_timestamp_iso ?? latest?.received_at ?? null
 
-  const syncActivityLog = useCallback(async (force = false): Promise<boolean> => {
-    if (!force && (!hasLoadedRemoteLog || !pendingSyncRef.current)) {
-      return false
-    }
-    const entries = activityLogRef.current
-    try {
-      const response = await fetch(ACTIVITY_LOG_ENDPOINT, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ entries }),
-      })
-      if (!response.ok) {
-        throw new Error(`Activity log sync failed with status ${response.status}`)
-      }
-      clearPendingSync()
-      return true
-    } catch (error) {
-      console.warn('[activity-log] failed to sync activity log', error)
-      return false
-    }
-  }, [clearPendingSync, hasLoadedRemoteLog])
-
   const handleManualSave = useCallback(async () => {
-    if (isSaving) {
+    if (isSaving || isClearing) {
       return
     }
     setIsSaving(true)
@@ -1058,69 +1065,121 @@ export default function App() {
       window.clearTimeout(saveNoticeTimeoutRef.current)
       saveNoticeTimeoutRef.current = null
     }
+
     const editApplied = applyEditingChanges()
     if (!editApplied) {
       setSaveNotice({ type: 'error', message: 'Please finish editing or fix validation errors before saving.' })
       setIsSaving(false)
       return
     }
-    if (!hasLoadedRemoteLog) {
-      skipRemoteLoadRef.current = true
-    }
-    markPendingSync()
-    const success = await syncActivityLog(true)
-    if (success) {
+
+    const entries = activityLogRef.current
+    try {
+      const response = await fetch(ACTIVITY_LOG_ENDPOINT, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entries })
+      })
+      if (!response.ok) {
+        throw new Error(`Activity log sync failed with status ${response.status}`)
+      }
       try {
-        await fetchRemoteActivityLog({ allowSkip: false })
-        setSaveNotice({ type: 'success', message: 'Activity log saved.' })
-        if (typeof window !== 'undefined') {
-          saveNoticeTimeoutRef.current = window.setTimeout(() => {
-            setSaveNotice(null)
-            saveNoticeTimeoutRef.current = null
-          }, 4000)
+        const payload = (await response.json()) as { entries?: unknown; historyCutoffIso?: unknown }
+        if (payload && typeof payload === 'object') {
+          if (payload.entries) {
+            applyActivityLogUpdate(() => normalizeActivityLog(payload.entries), { markDirty: false })
+          }
+          const cutoff =
+            typeof payload.historyCutoffIso === 'string' && payload.historyCutoffIso.length > 0
+              ? payload.historyCutoffIso
+              : null
+          historyCutoffRef.current = cutoff
+          setHistoryCursorReady(true)
         }
-      } catch (error) {
-        console.warn('[activity-log] failed to refresh activity log after manual save', error)
-        setSaveNotice({ type: 'error', message: 'Saved, but failed to refresh from server. Please reload to verify.' })
+      } catch {
+        // ignore parse issues
       }
-    } else {
+      clearPendingSync()
+      setSaveNotice({ type: 'success', message: 'Activity log saved.' })
+      if (typeof window !== 'undefined') {
+        saveNoticeTimeoutRef.current = window.setTimeout(() => {
+          setSaveNotice(null)
+          saveNoticeTimeoutRef.current = null
+        }, 4000)
+      }
+    } catch (error) {
+      console.warn('[activity-log] failed to save activity log', error)
       setSaveNotice({ type: 'error', message: 'Unable to save activity log. Please try again.' })
+    } finally {
+      setIsSaving(false)
     }
-    setIsSaving(false)
-  }, [applyEditingChanges, fetchRemoteActivityLog, hasLoadedRemoteLog, isSaving, markPendingSync, syncActivityLog])
+  }, [applyActivityLogUpdate, applyEditingChanges, clearPendingSync, isClearing, isSaving, setHistoryCursorReady])
 
-  useEffect(() => {
-    if (applyingRemoteLogRef.current) {
-      applyingRemoteLogRef.current = false
+  const handleClearAll = useCallback(async () => {
+    if (isClearing) {
       return
     }
-    if (!pendingSyncRef.current) {
-      return
-    }
-    void (async () => {
-      const synced = await syncActivityLog(true)
-      if (synced) {
-        try {
-          await fetchRemoteActivityLog({ allowSkip: false })
-        } catch (error) {
-          console.warn('[activity-log] failed to refresh activity log after background sync', error)
-        }
+    if (typeof window !== 'undefined') {
+      const confirmed = window.confirm('This will delete all activity log entries. Continue?')
+      if (!confirmed) {
+        return
       }
-    })()
-  }, [activityLog, fetchRemoteActivityLog, syncActivityLog])
-
-  useEffect(() => {
-    if (!hasLoadedRemoteLog) {
-      return
     }
-    if (typeof window === 'undefined') {
-      return
+    if (typeof window !== 'undefined' && saveNoticeTimeoutRef.current !== null) {
+      window.clearTimeout(saveNoticeTimeoutRef.current)
+      saveNoticeTimeoutRef.current = null
     }
-    const intervalId = window.setInterval(() => {
-      void syncActivityLog()
-    }, ACTIVITY_SYNC_INTERVAL_MS)
-    return () => window.clearInterval(intervalId)
-  }, [hasLoadedRemoteLog, syncActivityLog])
+    setSaveNotice(null)
+    setIsClearing(true)
+    try {
+      const response = await fetch(ACTIVITY_LOG_ENDPOINT, { method: 'DELETE' })
+      if (!response.ok) {
+        throw new Error(`Activity log clear failed with status ${response.status}`)
+      }
+      let payload: { entries?: unknown; historyCutoffIso?: unknown } | null = null
+      try {
+        payload = (await response.json()) as { entries?: unknown; historyCutoffIso?: unknown } | null
+      } catch {
+        payload = null
+      }
+      replayingHistoryRef.current = true
+      timelineRef.current = createTimelineState()
+      applyActivityLogUpdate(() => {
+        if (payload && payload.entries && typeof payload.entries === 'object') {
+          return normalizeActivityLog(payload.entries)
+        }
+        return {}
+      }, { markDirty: false })
+      const cutoff =
+        payload && typeof payload.historyCutoffIso === 'string' && payload.historyCutoffIso.length > 0
+          ? payload.historyCutoffIso
+          : new Date().toISOString()
+      historyCutoffRef.current = cutoff
+      setHistoryCursorReady(true)
+      setExpandedDates([toDateKey(Date.now())])
+      setEditing(null)
+      setEditingDurationValue('')
+      setEditingLabelValue('')
+      setEditError(null)
+      clearPendingSync()
+      skipRemoteLoadRef.current = false
+      pendingSyncRef.current = false
+      setHasLoadedRemoteLog(true)
+      setSaveNotice({ type: 'success', message: 'Activity log cleared.' })
+      if (typeof window !== 'undefined') {
+        saveNoticeTimeoutRef.current = window.setTimeout(() => {
+          setSaveNotice(null)
+          saveNoticeTimeoutRef.current = null
+        }, 4000)
+      }
+    } catch (error) {
+      console.warn('[activity-log] failed to clear activity log', error)
+      setSaveNotice({ type: 'error', message: 'Unable to clear activity log. Please try again.' })
+    } finally {
+      replayingHistoryRef.current = false
+      setIsClearing(false)
+    }
+  }, [applyActivityLogUpdate, clearPendingSync, isClearing, setHistoryCursorReady])
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -1139,7 +1198,13 @@ export default function App() {
           console.warn('[activity-log] sendBeacon flush failed', error)
         }
       }
-      void syncActivityLog(true)
+      // Fallback for when sendBeacon is not available or fails
+      fetch(ACTIVITY_LOG_ENDPOINT, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entries: activityLogRef.current }),
+        keepalive: true
+      })
     }
     window.addEventListener('pagehide', handleImmediateFlush)
     window.addEventListener('beforeunload', handleImmediateFlush)
@@ -1147,7 +1212,7 @@ export default function App() {
       window.removeEventListener('pagehide', handleImmediateFlush)
       window.removeEventListener('beforeunload', handleImmediateFlush)
     }
-  }, [syncActivityLog])
+  }, [])
 
   const postHeight = useCallback(() => {
     if (typeof window === 'undefined') {
@@ -1244,9 +1309,17 @@ export default function App() {
           </button>
           <button
             type="button"
+            className="download-button danger-button"
+            onClick={handleClearAll}
+            disabled={isClearing || isSaving}
+          >
+            {isClearing ? 'Clearing...' : 'Clear All'}
+          </button>
+          <button
+            type="button"
             className="download-button save-button"
             onClick={handleManualSave}
-            disabled={isSaving}
+            disabled={isSaving || isClearing}
           >
             {isSaving ? 'Saving...' : 'Save Changes'}
           </button>

@@ -50,6 +50,12 @@ db.exec(`
     PRIMARY KEY (date_key, label)
   )
 `);
+db.exec(`
+  CREATE TABLE IF NOT EXISTS activity_log_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  )
+`);
 db.exec("CREATE INDEX IF NOT EXISTS idx_imu_readings_side ON imu_readings(side)");
 // --- Prepared insert statement ---
 const insertStatement = db.prepare(`
@@ -167,6 +173,14 @@ const upsertActivityLogStatement = db.prepare(`
     side = excluded.side,
     updated_at = CURRENT_TIMESTAMP
 `);
+const getMetaStatement = db.prepare(`
+  SELECT value FROM activity_log_meta WHERE key = ?
+`);
+const upsertMetaStatement = db.prepare(`
+  INSERT INTO activity_log_meta (key, value)
+  VALUES (?, ?)
+  ON CONFLICT(key) DO UPDATE SET value = excluded.value
+`);
 export function getActivityLog() {
     const rows = selectActivityLogStatement.all();
     const result = {};
@@ -186,10 +200,11 @@ export function getActivityLog() {
         }
         result[dateKey][label] = { totalMs, side };
     }
-    return result;
+    return { entries: result, historyCutoffIso: getActivityLogHistoryCutoff() };
 }
 const replaceActivityLogTxn = db.transaction((entries) => {
     clearActivityLogStatement.run();
+    const sanitized = {};
     for (const [dateKey, perLabel] of Object.entries(entries)) {
         if (typeof dateKey !== "string" || dateKey.length === 0 || !perLabel || typeof perLabel !== "object") {
             continue;
@@ -206,11 +221,41 @@ const replaceActivityLogTxn = db.transaction((entries) => {
                 continue;
             }
             upsertActivityLogStatement.run(dateKey, label, totalMs, side);
+            if (!sanitized[dateKey]) {
+                sanitized[dateKey] = {};
+            }
+            sanitized[dateKey][label] = { totalMs, side };
         }
     }
+    return sanitized;
 });
+const HISTORY_CUTOFF_KEY = "history_cutoff_iso";
+function computeHistoryCutoffIso() {
+    const latest = getLatestReading();
+    const iso = latest?.received_at ?? latest?.imu_timestamp_iso ?? new Date().toISOString();
+    return typeof iso === "string" && iso.length > 0 ? iso : new Date().toISOString();
+}
+function setActivityLogHistoryCutoff(value) {
+    upsertMetaStatement.run(HISTORY_CUTOFF_KEY, value);
+}
+export function getActivityLogHistoryCutoff() {
+    const row = getMetaStatement.get(HISTORY_CUTOFF_KEY);
+    if (!row) {
+        return null;
+    }
+    return typeof row.value === "string" && row.value.length > 0 ? row.value : null;
+}
 export function replaceActivityLog(entries) {
-    replaceActivityLogTxn(entries);
+    const sanitized = replaceActivityLogTxn(entries);
+    const cutoff = computeHistoryCutoffIso();
+    setActivityLogHistoryCutoff(cutoff);
+    return { entries: sanitized, historyCutoffIso: cutoff };
+}
+export function clearActivityLog() {
+    clearActivityLogStatement.run();
+    const cutoff = new Date().toISOString();
+    setActivityLogHistoryCutoff(cutoff);
+    return { entries: {}, historyCutoffIso: cutoff };
 }
 const baseHistoryQuery = `
   SELECT

@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import cors from "cors";
 import express from "express";
 import mqtt from "mqtt";
-import { persistReading, getDatabasePath, getLatestReadingWithSegment, getReadingHistory, getAllLabels, setLabel, getActivityLog, replaceActivityLog } from "./database.js";
+import { persistReading, getDatabasePath, getLatestReadingWithSegment, getReadingHistory, getAllLabels, setLabel, getActivityLog, replaceActivityLog, clearActivityLog } from "./database.js";
 import { parsePayload } from "./parser.js";
 import { classifyVector, loadProfiles } from "./profiles.js";
 const __filename = fileURLToPath(import.meta.url);
@@ -147,8 +147,8 @@ function startHttpServer() {
         }
     });
     app.get("/api/activity-log", (_request, response) => {
-        const entries = getActivityLog();
-        response.json({ entries });
+        const snapshot = getActivityLog();
+        response.json(snapshot);
     });
     app.put("/api/activity-log", (request, response) => {
         const payload = request.body;
@@ -157,12 +157,22 @@ function startHttpServer() {
             return;
         }
         try {
-            replaceActivityLog(payload.entries);
-            response.json({ status: "ok" });
+            const persisted = replaceActivityLog(payload.entries);
+            response.json({ status: "ok", ...persisted });
         }
         catch (error) {
             console.error("[http] failed to persist activity log", error);
             response.status(500).json({ error: "activity_log_persist_failed" });
+        }
+    });
+    app.delete("/api/activity-log", (_request, response) => {
+        try {
+            const snapshot = clearActivityLog();
+            response.json({ status: "ok", ...snapshot });
+        }
+        catch (error) {
+            console.error("[http] failed to clear activity log", error);
+            response.status(500).json({ error: "activity_log_clear_failed" });
         }
     });
     app.get("/healthz", (_request, response) => {
