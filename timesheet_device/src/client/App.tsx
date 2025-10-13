@@ -308,6 +308,7 @@ export default function App() {
       return {}
     }
   })
+  const activityLogRef = useRef<ActivityLogMap>(activityLog)
   const [editing, setEditing] = useState<EditingState | null>(null)
   const [editingDurationValue, setEditingDurationValue] = useState<string>('')
   const [editingLabelValue, setEditingLabelValue] = useState<string>('')
@@ -329,13 +330,88 @@ export default function App() {
   const [historyReady, setHistoryReady] = useState(false)
   const [hasLoadedRemoteLog, setHasLoadedRemoteLog] = useState(false)
   const [pendingSync, setPendingSync] = useState(false)
+  const pendingSyncRef = useRef(false)
+  const skipRemoteLoadRef = useRef(false)
+  const remoteLogRequestIdRef = useRef(0)
   const applyingRemoteLogRef = useRef(false)
+
+  const markPendingSync = useCallback(() => {
+    if (!pendingSyncRef.current) {
+      pendingSyncRef.current = true
+      setPendingSync(true)
+    }
+  }, [])
+
+  const clearPendingSync = useCallback(() => {
+    if (pendingSyncRef.current) {
+      pendingSyncRef.current = false
+      setPendingSync(false)
+    }
+  }, [])
+
+  const applyActivityLogUpdate = useCallback(
+    (updater: (prev: ActivityLogMap) => ActivityLogMap, options?: { markDirty?: boolean }) => {
+      setActivityLog((prev) => {
+        const next = updater(prev)
+        activityLogRef.current = next
+        if ((options?.markDirty ?? true) && next !== prev) {
+          if (!hasLoadedRemoteLog) {
+            skipRemoteLoadRef.current = true
+          }
+          markPendingSync()
+        }
+        return next
+      })
+    },
+    [hasLoadedRemoteLog, markPendingSync],
+  )
+
+  const fetchRemoteActivityLog = useCallback(
+    async (options?: { allowSkip?: boolean }) => {
+      const allowSkip = options?.allowSkip ?? true
+      const requestId = remoteLogRequestIdRef.current + 1
+      remoteLogRequestIdRef.current = requestId
+      const response = await fetch(ACTIVITY_LOG_ENDPOINT, { cache: 'no-store' })
+      if (!response.ok) {
+        throw new Error(`Activity log request failed with status ${response.status}`)
+      }
+      const payload = (await response.json()) as { entries?: unknown }
+      if (requestId !== remoteLogRequestIdRef.current) {
+        return false
+      }
+      if (payload && typeof payload === 'object' && payload.entries) {
+        const shouldSkip = allowSkip && skipRemoteLoadRef.current
+        if (shouldSkip) {
+          console.warn('[activity-log] skipped applying remote log because local edits occurred first')
+          skipRemoteLoadRef.current = false
+          setHasLoadedRemoteLog(true)
+          if (!pendingSyncRef.current) {
+            clearPendingSync()
+          }
+          return false
+        }
+        applyingRemoteLogRef.current = true
+        applyActivityLogUpdate(() => normalizeActivityLog(payload.entries), { markDirty: false })
+      }
+      skipRemoteLoadRef.current = false
+      setHasLoadedRemoteLog(true)
+      if (!pendingSyncRef.current) {
+        clearPendingSync()
+      }
+      return true
+    },
+    [applyActivityLogUpdate, clearPendingSync],
+  )
+
+  useEffect(() => {
+    activityLogRef.current = activityLog
+  }, [activityLog])
 
   const addDurationToLog = useCallback((label: string, side: number | null, startMs: number, endMs: number) => {
     if (endMs <= startMs) {
       return
     }
-    setActivityLog((prev) => {
+    applyActivityLogUpdate((prev) => {
       const next: ActivityLogMap = { ...prev }
       let cursor = startMs
       while (cursor < endMs) {
@@ -355,12 +431,12 @@ export default function App() {
       }
       return next
     })
-  }, [])
+  }, [applyActivityLogUpdate])
 
   const resetActivityState = useCallback(() => {
     timelineRef.current = createTimelineState()
-    setActivityLog(() => ({}))
-  }, [])
+    applyActivityLogUpdate(() => ({}))
+  }, [applyActivityLogUpdate])
 
   const handleReading = useCallback(
     (payload: LatestReadingResponse) => {
@@ -433,36 +509,24 @@ export default function App() {
   useEffect(() => {
     let cancelled = false
 
-    const loadRemoteActivityLog = async () => {
+    const load = async () => {
       try {
-        const response = await fetch(ACTIVITY_LOG_ENDPOINT, { cache: 'no-store' })
-        if (!response.ok) {
-          throw new Error(`Activity log request failed with status ${response.status}`)
-        }
-        const payload = (await response.json()) as { entries?: unknown }
-        if (cancelled) {
-          return
-        }
-        if (payload && typeof payload === 'object' && payload.entries) {
-          applyingRemoteLogRef.current = true
-          setActivityLog(normalizeActivityLog(payload.entries))
-        }
-        setHasLoadedRemoteLog(true)
-        setPendingSync(false)
+        await fetchRemoteActivityLog({ allowSkip: true })
       } catch (error) {
         if (!cancelled) {
           console.warn('[activity-log] failed to load activity log from server', error)
+          skipRemoteLoadRef.current = false
           setHasLoadedRemoteLog(true)
         }
       }
     }
 
-    loadRemoteActivityLog()
+    void load()
 
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [fetchRemoteActivityLog])
 
   useEffect(() => () => {
     if (typeof window === 'undefined') {
@@ -794,28 +858,28 @@ export default function App() {
     setEditError(null)
   }, [])
 
-  const handleEditSave = useCallback(() => {
+  const applyEditingChanges = useCallback((): boolean => {
     if (!editing) {
-      return
+      return true
     }
     const { dateKey, originalLabel } = editing
     const parsedMs = parseDurationInput(editingDurationValue)
     if (!Number.isFinite(parsedMs)) {
       setEditError('Please enter duration as mm:ss, hh:mm:ss, or minutes.')
-      return
+      return false
     }
     const normalizedLabel = editingLabelValue.trim()
     if (normalizedLabel.length === 0) {
       setEditError('Activity name cannot be empty.')
-      return
+      return false
     }
     const activeContribution = getActiveContribution(dateKey, originalLabel)
     if (parsedMs < activeContribution) {
       setEditError(`Duration cannot be less than the active segment (${formatDuration(activeContribution)}).`)
-      return
+      return false
     }
     const storedMs = Math.max(0, parsedMs - activeContribution)
-    setActivityLog((prev) => {
+    applyActivityLogUpdate((prev) => {
       const next: ActivityLogMap = { ...prev }
       const entry = { ...(next[dateKey] ?? {}) }
       const originalEntry = entry[originalLabel]
@@ -842,7 +906,12 @@ export default function App() {
     setEditingDurationValue('')
     setEditingLabelValue('')
     setEditError(null)
-  }, [editing, editingDurationValue, editingLabelValue, getActiveContribution])
+    return true
+  }, [applyActivityLogUpdate, editing, editingDurationValue, editingLabelValue, getActiveContribution])
+
+  const handleEditSave = useCallback(() => {
+    void applyEditingChanges()
+  }, [applyEditingChanges])
 
   const handleDelete = useCallback(
     (dateKey: string, label: string) => {
@@ -851,7 +920,7 @@ export default function App() {
         setEditError('Stop the current activity before deleting it.')
         return
       }
-      setActivityLog((prev) => {
+      applyActivityLogUpdate((prev) => {
         const entry = prev[dateKey]
         if (!entry || !(label in entry)) {
           return prev
@@ -873,7 +942,7 @@ export default function App() {
       }
       setEditError(null)
     },
-    [editing],
+    [applyActivityLogUpdate, editing, getActiveContribution],
   )
 
   const toggleDate = useCallback((dateKey: string) => {
@@ -958,32 +1027,29 @@ export default function App() {
   const sourceTimestamp = latest?.imu_timestamp_text ?? latest?.imu_timestamp_iso ?? latest?.received_at ?? null
 
   const syncActivityLog = useCallback(async (force = false): Promise<boolean> => {
-    if (!hasLoadedRemoteLog || (!pendingSync && !force)) {
+    if (!force && (!hasLoadedRemoteLog || !pendingSyncRef.current)) {
       return false
     }
+    const entries = activityLogRef.current
     try {
       const response = await fetch(ACTIVITY_LOG_ENDPOINT, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ entries: activityLog }),
+        body: JSON.stringify({ entries }),
       })
       if (!response.ok) {
         throw new Error(`Activity log sync failed with status ${response.status}`)
       }
-      setPendingSync(false)
+      clearPendingSync()
       return true
     } catch (error) {
       console.warn('[activity-log] failed to sync activity log', error)
       return false
     }
-  }, [activityLog, hasLoadedRemoteLog, pendingSync])
+  }, [clearPendingSync, hasLoadedRemoteLog])
 
   const handleManualSave = useCallback(async () => {
     if (isSaving) {
-      return
-    }
-    if (!hasLoadedRemoteLog) {
-      setSaveNotice({ type: 'error', message: 'Activity log is still loading. Please try again shortly.' })
       return
     }
     setIsSaving(true)
@@ -992,32 +1058,56 @@ export default function App() {
       window.clearTimeout(saveNoticeTimeoutRef.current)
       saveNoticeTimeoutRef.current = null
     }
+    const editApplied = applyEditingChanges()
+    if (!editApplied) {
+      setSaveNotice({ type: 'error', message: 'Please finish editing or fix validation errors before saving.' })
+      setIsSaving(false)
+      return
+    }
+    if (!hasLoadedRemoteLog) {
+      skipRemoteLoadRef.current = true
+    }
+    markPendingSync()
     const success = await syncActivityLog(true)
     if (success) {
-      setSaveNotice({ type: 'success', message: 'Activity log saved.' })
-      if (typeof window !== 'undefined') {
-        saveNoticeTimeoutRef.current = window.setTimeout(() => {
-          setSaveNotice(null)
-          saveNoticeTimeoutRef.current = null
-        }, 4000)
+      try {
+        await fetchRemoteActivityLog({ allowSkip: false })
+        setSaveNotice({ type: 'success', message: 'Activity log saved.' })
+        if (typeof window !== 'undefined') {
+          saveNoticeTimeoutRef.current = window.setTimeout(() => {
+            setSaveNotice(null)
+            saveNoticeTimeoutRef.current = null
+          }, 4000)
+        }
+      } catch (error) {
+        console.warn('[activity-log] failed to refresh activity log after manual save', error)
+        setSaveNotice({ type: 'error', message: 'Saved, but failed to refresh from server. Please reload to verify.' })
       }
     } else {
       setSaveNotice({ type: 'error', message: 'Unable to save activity log. Please try again.' })
     }
     setIsSaving(false)
-  }, [hasLoadedRemoteLog, isSaving, syncActivityLog])
+  }, [applyEditingChanges, fetchRemoteActivityLog, hasLoadedRemoteLog, isSaving, markPendingSync, syncActivityLog])
 
   useEffect(() => {
-    if (!hasLoadedRemoteLog) {
-      return
-    }
     if (applyingRemoteLogRef.current) {
       applyingRemoteLogRef.current = false
       return
     }
-    setPendingSync(true)
-    void syncActivityLog(true)
-  }, [activityLog, hasLoadedRemoteLog, syncActivityLog])
+    if (!pendingSyncRef.current) {
+      return
+    }
+    void (async () => {
+      const synced = await syncActivityLog(true)
+      if (synced) {
+        try {
+          await fetchRemoteActivityLog({ allowSkip: false })
+        } catch (error) {
+          console.warn('[activity-log] failed to refresh activity log after background sync', error)
+        }
+      }
+    })()
+  }, [activityLog, fetchRemoteActivityLog, syncActivityLog])
 
   useEffect(() => {
     if (!hasLoadedRemoteLog) {
@@ -1037,12 +1127,12 @@ export default function App() {
       return
     }
     const handleImmediateFlush = () => {
-      if (!pendingSync) {
+      if (!pendingSyncRef.current) {
         return
       }
       if (navigator.sendBeacon) {
         try {
-          const payload = new Blob([JSON.stringify({ entries: activityLog })], { type: 'application/json' })
+          const payload = new Blob([JSON.stringify({ entries: activityLogRef.current })], { type: 'application/json' })
           navigator.sendBeacon(ACTIVITY_LOG_ENDPOINT, payload)
           return
         } catch (error) {
@@ -1057,7 +1147,7 @@ export default function App() {
       window.removeEventListener('pagehide', handleImmediateFlush)
       window.removeEventListener('beforeunload', handleImmediateFlush)
     }
-  }, [activityLog, pendingSync, syncActivityLog])
+  }, [syncActivityLog])
 
   const postHeight = useCallback(() => {
     if (typeof window === 'undefined') {
