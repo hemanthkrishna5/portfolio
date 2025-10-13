@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
-import { Box, Typography, Grid, Alert, TextField, Table, TableBody, TableCell, TableContainer, TableHead, TableRow } from '@mui/material';
+import { Box, Typography, Grid, Alert, TextField } from '@mui/material';
 import { motion } from 'framer-motion';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { Text as DreiText } from '@react-three/drei';
@@ -134,7 +134,6 @@ export function Electronics() {
     lastMs: null,
   });
   const [nowTick, setNowTick] = useState(() => Date.now());
-  const [history, setHistory] = useState<LatestReadingResponse[]>([]);
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const iframeOriginRef = useRef<string | null>(null);
@@ -304,7 +303,6 @@ export function Electronics() {
           ? entries.map(normalizeReading).filter((entry) => entry.side !== null)
           : [];
         normalized.sort((a, b) => parseTimestampMs(a) - parseTimestampMs(b));
-        setHistory(normalized);
 
         if (normalized.length > 0) {
           const derivedState = deriveActiveState(normalized);
@@ -552,37 +550,37 @@ export function Electronics() {
           initial={{ opacity: 0, scale: 0.98 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{ duration: 0.7, ease: 'easeOut' }}
-          sx={{ flexGrow: 1 }}
+          sx={{
+            flexGrow: 1,
+            minHeight: { xs: '70vh', md: 'calc(100vh - 280px)' },
+          }}
         >
-          <Typography variant="h5" sx={{ color: '#fff', mb: 2, fontWeight: 600 }}>
-            Activity Log
-          </Typography>
-          <TableContainer sx={{ maxHeight: { xs: 420, md: 560 }, background: 'transparent' }}>
-            <Table stickyHeader size="small" sx={{ background: 'transparent' }}>
-              <TableHead>
-                <TableRow>
-                  <TableCell sx={{ color: '#9fb3d9', background: 'rgba(15,22,35,0.7)', borderBottomColor: 'rgba(255,255,255,0.08)' }}>Time</TableCell>
-                  <TableCell sx={{ color: '#9fb3d9', background: 'rgba(15,22,35,0.7)', borderBottomColor: 'rgba(255,255,255,0.08)' }}>Side</TableCell>
-                  <TableCell sx={{ color: '#9fb3d9', background: 'rgba(15,22,35,0.7)', borderBottomColor: 'rgba(255,255,255,0.08)' }}>Label</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {[...history].reverse().slice(0, 300).map((row, idx) => (
-                  <TableRow key={idx} hover>
-                    <TableCell sx={{ color: '#e7edf7', borderBottomColor: 'rgba(255,255,255,0.06)' }}>
-                      {formatTimestampDisplay(row)}
-                    </TableCell>
-                    <TableCell sx={{ color: '#e7edf7', borderBottomColor: 'rgba(255,255,255,0.06)' }}>
-                      {row.side ?? '—'}
-                    </TableCell>
-                    <TableCell sx={{ color: '#e7edf7', borderBottomColor: 'rgba(255,255,255,0.06)' }}>
-                      {row.side !== null ? resolveLabel(labels, row.side) : '—'}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </TableContainer>
+          <Box
+            sx={{
+              display: 'block',
+              width: '100%',
+              height: `${iframeHeight}px`,
+              borderRadius: 2,
+              overflow: 'hidden',
+              border: '1px solid rgba(255,255,255,0.08)',
+              backgroundColor: '#0b1020',
+            }}
+          >
+            <iframe
+              ref={iframeRef}
+              src={iframeSrc}
+              title="Timesheet device dashboard"
+              loading="lazy"
+              onLoad={handleIframeLoad}
+              style={{
+                display: 'block',
+                width: '100%',
+                height: '100%',
+                border: 'none',
+                background: 'transparent',
+              }}
+            />
+          </Box>
         </Box>
       </Box>
     </motion.div>
