@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
-import { Box, Typography, Grid, Alert, TextField } from '@mui/material';
+import { Box, Typography, Grid, Alert, TextField, Table, TableBody, TableCell, TableContainer, TableHead, TableRow } from '@mui/material';
 import { motion } from 'framer-motion';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { Text as DreiText } from '@react-three/drei';
@@ -16,6 +16,21 @@ const LABEL_STORAGE_KEY = 'dodec-labels';
 const LEGACY_LABEL_KEYS = ['dodeca-labels'];
 const LABEL_MESSAGE_UPDATE = 'DODEC_LABEL_UPDATE';
 const LABEL_MESSAGE_REQUEST = 'DODEC_LABELS_REQUEST';
+function computeLabelsEndpoint(): string {
+  const override = import.meta.env.VITE_DEVICE_LABELS_URL;
+  if (typeof override === 'string' && override.length > 0) {
+    return override;
+  }
+  try {
+    const apiUrl = new URL(API_ENDPOINT, typeof window !== 'undefined' ? window.location.origin : 'https://placeholder.local');
+    const base = `${apiUrl.protocol}//${apiUrl.host}`;
+    return `${apiUrl.origin === 'https://placeholder.local' ? '' : base}/api/labels`;
+  } catch {
+    return '/api/labels';
+  }
+}
+
+const LABELS_ENDPOINT = computeLabelsEndpoint();
 const HISTORY_LIMIT = Number.parseInt(import.meta.env.VITE_DEVICE_HISTORY_LIMIT ?? '1200', 10);
 const DURATION_TICK_MS = 1000;
 const DEFAULT_LABEL_PREFIX = 'Side';
@@ -27,6 +42,7 @@ interface LatestReadingResponse {
   imu_timestamp_iso?: string | null;
   received_at?: string | null;
   confidence?: boolean | null;
+  segment_started_at?: string | null;
 }
 
 interface FaceInfo {
@@ -118,11 +134,53 @@ export function Electronics() {
     lastMs: null,
   });
   const [nowTick, setNowTick] = useState(() => Date.now());
+  const [history, setHistory] = useState<LatestReadingResponse[]>([]);
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const iframeOriginRef = useRef<string | null>(null);
   const [iframeHeight, setIframeHeight] = useState<number>(720);
   const faceOrder = useMemo(() => parseFaceOrder(import.meta.env.VITE_DODECA_FACE_ORDER), []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadRemoteLabels = async () => {
+      try {
+        const response = await fetch(LABELS_ENDPOINT, { cache: 'no-store' });
+        if (!response.ok) {
+          throw new Error(`Failed to load labels (status ${response.status})`);
+        }
+        const payload = (await response.json()) as { labels?: Record<string, string> };
+        if (cancelled || !payload || typeof payload.labels !== 'object' || payload.labels === null) {
+          return;
+        }
+        setLabels((prev) => {
+          const next = { ...prev };
+          let changed = false;
+          for (const [key, value] of Object.entries(payload.labels)) {
+            const numericSide = Number(key);
+            if (!Number.isFinite(numericSide) || numericSide < 1 || numericSide > TOTAL_SIDES) {
+              continue;
+            }
+            const sanitized = typeof value === 'string' ? value : '';
+            if (next[numericSide] !== sanitized) {
+              next[numericSide] = sanitized;
+              changed = true;
+            }
+          }
+          return changed ? next : prev;
+        });
+      } catch (error) {
+        console.error('[electronics] failed to load labels from server', error);
+      }
+    };
+
+    loadRemoteLabels();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const postLabelsToIframe = useCallback(() => {
     if (typeof window === 'undefined') {
@@ -136,6 +194,38 @@ export function Electronics() {
     targetWindow.postMessage({ type: LABEL_MESSAGE_UPDATE, labels }, origin);
   }, [labels]);
 
+  const labelSaveTimeoutRef = useRef<number | null>(null);
+
+  const submitLabelUpdate = useCallback(async (side: number, value: string) => {
+    const payload = { label: value };
+    try {
+      const response = await fetch(`${LABELS_ENDPOINT.replace(/\/$/, '')}/${side}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) {
+        throw new Error(`Failed to persist label (status ${response.status})`);
+      }
+    } catch (error) {
+      console.error(`[electronics] failed to persist label for side ${side}`, error);
+    }
+  }, []);
+
+  const scheduleLabelSave = useCallback((side: number, value: string) => {
+    if (typeof window === 'undefined') {
+      submitLabelUpdate(side, value);
+      return;
+    }
+    if (labelSaveTimeoutRef.current !== null) {
+      window.clearTimeout(labelSaveTimeoutRef.current);
+    }
+    labelSaveTimeoutRef.current = window.setTimeout(() => {
+      labelSaveTimeoutRef.current = null;
+      submitLabelUpdate(side, value);
+    }, 400);
+  }, [submitLabelUpdate]);
+
   useEffect(() => {
     if (typeof window === 'undefined') {
       return;
@@ -145,6 +235,13 @@ export function Electronics() {
       iframeOriginRef.current = resolved;
     } catch {
       iframeOriginRef.current = '*';
+    }
+  }, []);
+
+  useEffect(() => () => {
+    if (typeof window !== 'undefined' && labelSaveTimeoutRef.current !== null) {
+      window.clearTimeout(labelSaveTimeoutRef.current);
+      labelSaveTimeoutRef.current = null;
     }
   }, []);
 
@@ -207,6 +304,7 @@ export function Electronics() {
           ? entries.map(normalizeReading).filter((entry) => entry.side !== null)
           : [];
         normalized.sort((a, b) => parseTimestampMs(a) - parseTimestampMs(b));
+        setHistory(normalized);
 
         if (normalized.length > 0) {
           const derivedState = deriveActiveState(normalized);
@@ -246,7 +344,15 @@ export function Electronics() {
     const normalized = normalizeReading(payload);
     if (normalized.side !== null) {
       const timestampMs = parseTimestampMs(normalized);
+      const segmentStart = normalized.segment_started_at ? safeParseTimestamp(normalized.segment_started_at) : null;
       setActiveState((prev) => {
+        if (segmentStart !== null && (prev.side !== normalized.side || (prev.startMs !== null && segmentStart < prev.startMs))) {
+          return {
+            side: normalized.side,
+            startMs: segmentStart,
+            lastMs: Math.max(segmentStart, timestampMs),
+          };
+        }
         if (prev.side === normalized.side) {
           const startMs = prev.startMs !== null ? Math.min(prev.startMs, timestampMs) : timestampMs;
           const lastMs = prev.lastMs !== null ? Math.max(prev.lastMs, timestampMs) : timestampMs;
@@ -320,13 +426,40 @@ export function Electronics() {
         ...prev,
         [activeSide]: value,
       }));
+      scheduleLabelSave(activeSide, value);
     },
-    [activeSide],
+    [activeSide, scheduleLabelSave],
   );
 
   const handleIframeLoad = useCallback(() => {
     postLabelsToIframe();
   }, [postLabelsToIframe]);
+
+  const handleLabelBlur = useCallback(() => {
+    if (activeSide === null) {
+      return;
+    }
+    if (typeof window !== 'undefined' && labelSaveTimeoutRef.current !== null) {
+      window.clearTimeout(labelSaveTimeoutRef.current);
+      labelSaveTimeoutRef.current = null;
+    }
+    const raw = labels[activeSide] ?? '';
+    const sanitized = raw.trim();
+    if (sanitized !== raw) {
+      setLabels((prev) => ({
+        ...prev,
+        [activeSide]: sanitized,
+      }));
+    }
+    submitLabelUpdate(activeSide, sanitized);
+  }, [activeSide, labels, submitLabelUpdate]);
+
+  const handleLabelKeyDown = useCallback((event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      (event.target as HTMLInputElement).blur();
+    }
+  }, []);
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.5 }}>
@@ -375,9 +508,6 @@ export function Electronics() {
                 Current Side Label
               </Typography>
               <Typography variant="body2" sx={{ color: '#8ea0bb' }}>
-                {activeSide !== null ? `Editing ${activeLabel}` : 'Waiting for device signal…'}
-              </Typography>
-              <Typography variant="body2" sx={{ color: '#8ea0bb' }}>
                 Latest IMU update:{' '}
                 <Typography component="span" variant="body2" sx={{ color: '#fff' }}>
                   {latestTimestampText}
@@ -394,6 +524,8 @@ export function Electronics() {
                 placeholder={labelPlaceholder}
                 value={currentLabelValue}
                 onChange={handleLabelChange}
+                onBlur={handleLabelBlur}
+                onKeyDown={handleLabelKeyDown}
                 disabled={activeSide === null}
                 autoComplete="off"
                 variant="outlined"
@@ -409,9 +541,6 @@ export function Electronics() {
               />
               <Box sx={{ flexGrow: 1 }} />
               <Typography variant="caption" sx={{ color: '#7f8ba5' }}>
-                Saved locally to this browser.
-              </Typography>
-              <Typography variant="caption" sx={{ color: '#7f8ba5' }}>
                 Active for: {activeDurationText}
               </Typography>
             </Box>
@@ -423,37 +552,37 @@ export function Electronics() {
           initial={{ opacity: 0, scale: 0.98 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{ duration: 0.7, ease: 'easeOut' }}
-          sx={{
-            flexGrow: 1,
-            minHeight: { xs: '70vh', md: 'calc(100vh - 280px)' },
-          }}
+          sx={{ flexGrow: 1 }}
         >
-          <Box
-            sx={{
-              display: 'block',
-              width: '100%',
-              height: `${iframeHeight}px`,
-              borderRadius: 2,
-              overflow: 'hidden',
-              border: '1px solid rgba(255,255,255,0.08)',
-              backgroundColor: 'transparent',
-            }}
-          >
-            <iframe
-              ref={iframeRef}
-              src={iframeSrc}
-              title="Timesheet device dashboard"
-              loading="lazy"
-              onLoad={handleIframeLoad}
-              style={{
-                display: 'block',
-                width: '100%',
-                height: '100%',
-                border: 'none',
-                background: 'transparent',
-              }}
-            />
-          </Box>
+          <Typography variant="h5" sx={{ color: '#fff', mb: 2, fontWeight: 600 }}>
+            Activity Log
+          </Typography>
+          <TableContainer sx={{ maxHeight: { xs: 420, md: 560 }, background: 'transparent' }}>
+            <Table stickyHeader size="small" sx={{ background: 'transparent' }}>
+              <TableHead>
+                <TableRow>
+                  <TableCell sx={{ color: '#9fb3d9', background: 'rgba(15,22,35,0.7)', borderBottomColor: 'rgba(255,255,255,0.08)' }}>Time</TableCell>
+                  <TableCell sx={{ color: '#9fb3d9', background: 'rgba(15,22,35,0.7)', borderBottomColor: 'rgba(255,255,255,0.08)' }}>Side</TableCell>
+                  <TableCell sx={{ color: '#9fb3d9', background: 'rgba(15,22,35,0.7)', borderBottomColor: 'rgba(255,255,255,0.08)' }}>Label</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {[...history].reverse().slice(0, 300).map((row, idx) => (
+                  <TableRow key={idx} hover>
+                    <TableCell sx={{ color: '#e7edf7', borderBottomColor: 'rgba(255,255,255,0.06)' }}>
+                      {formatTimestampDisplay(row)}
+                    </TableCell>
+                    <TableCell sx={{ color: '#e7edf7', borderBottomColor: 'rgba(255,255,255,0.06)' }}>
+                      {row.side ?? '—'}
+                    </TableCell>
+                    <TableCell sx={{ color: '#e7edf7', borderBottomColor: 'rgba(255,255,255,0.06)' }}>
+                      {row.side !== null ? resolveLabel(labels, row.side) : '—'}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
         </Box>
       </Box>
     </motion.div>
@@ -637,6 +766,7 @@ function normalizeReading(payload: LatestReadingResponse): LatestReadingResponse
     imu_timestamp_iso: payload.imu_timestamp_iso ?? null,
     received_at: payload.received_at ?? null,
     confidence: typeof payload.confidence === 'boolean' ? payload.confidence : null,
+    segment_started_at: payload.segment_started_at ?? null,
   };
 }
 
@@ -647,12 +777,14 @@ function deriveActiveState(entries: LatestReadingResponse[]) {
       continue;
     }
     const timestamp = parseTimestampMs(entry);
+    const segmentStart = entry.segment_started_at ? safeParseTimestamp(entry.segment_started_at) : null;
     if (state.side === entry.side && state.startMs !== null) {
-      state.startMs = Math.min(state.startMs, timestamp);
+      const candidateStart = segmentStart !== null ? segmentStart : timestamp;
+      state.startMs = Math.min(state.startMs, candidateStart);
       state.lastMs = state.lastMs !== null ? Math.max(state.lastMs, timestamp) : timestamp;
     } else {
       state.side = entry.side;
-      state.startMs = timestamp;
+      state.startMs = segmentStart !== null ? segmentStart : timestamp;
       state.lastMs = timestamp;
     }
   }
@@ -676,6 +808,14 @@ function parseTimestampMs(payload: LatestReadingResponse): number {
     }
   }
   return Date.now();
+}
+
+function safeParseTimestamp(value: string | null | undefined): number | null {
+  if (!value) {
+    return null;
+  }
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
 }
 
 function formatDuration(ms: number): string {

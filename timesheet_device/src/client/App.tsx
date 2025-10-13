@@ -12,6 +12,19 @@ const DEFAULT_LABEL_PREFIX = 'Side'
 const DAY_MS = 24 * 60 * 60 * 1000
 const LABEL_MESSAGE_UPDATE = 'DODEC_LABEL_UPDATE'
 const LABEL_MESSAGE_REQUEST = 'DODEC_LABELS_REQUEST'
+const LABELS_ENDPOINT = (() => {
+  const override = (import.meta as any).env?.VITE_DEVICE_LABELS_URL as string | undefined
+  if (override && override.length > 0) {
+    return override
+  }
+  try {
+    const apiUrl = new URL(API_ENDPOINT, 'https://placeholder.local')
+    const origin = apiUrl.origin === 'https://placeholder.local' ? '' : `${apiUrl.protocol}//${apiUrl.host}`
+    return `${origin}/api/labels`
+  } catch {
+    return '/api/labels'
+  }
+})()
 
 type RangeMode = 'week' | 'month' | 'custom'
 
@@ -23,6 +36,7 @@ interface LatestReadingResponse {
   imu_timestamp_iso?: string | null
   received_at?: string | null
   confidence?: boolean | null
+  segment_started_at?: string | null
 }
 
 interface LatestReadingState extends LatestReadingResponse {}
@@ -133,6 +147,14 @@ const parseTimestampMs = (payload: LatestReadingResponse): number => {
   }
 
   return Date.now()
+}
+
+const safeParseTimestamp = (value?: string | null): number | null => {
+  if (!value) {
+    return null
+  }
+  const parsed = Date.parse(value)
+  return Number.isNaN(parsed) ? null : parsed
 }
 
 const toDateKey = (timestampMs: number): string => {
@@ -250,6 +272,7 @@ export default function App() {
 
   const labelsRef = useRef(labels)
   const suppressLabelBroadcastRef = useRef(false)
+  const labelSaveTimeoutsRef = useRef<Record<number, number | null>>({})
   const timelineRef = useRef<TimelineState>(createTimelineState())
   const [historyReady, setHistoryReady] = useState(false)
 
@@ -290,17 +313,21 @@ export default function App() {
 
       const label = resolveLabel(labelsRef.current, sideValue)
       const timestampMs = parseTimestampMs(payload)
+      const segmentStartMs = payload.segment_started_at ? safeParseTimestamp(payload.segment_started_at) : null
       const state = timelineRef.current
 
       if (state.currentLabel === null || state.startTime === null) {
         state.currentLabel = label
-        state.startTime = timestampMs
+        state.startTime = segmentStartMs ?? timestampMs
         state.lastTimestamp = timestampMs
         state.lastSide = sideValue
         return
       }
 
       if (label === state.currentLabel) {
+        if (segmentStartMs !== null && (state.startTime === null || segmentStartMs < state.startTime)) {
+          state.startTime = segmentStartMs
+        }
         state.lastTimestamp = timestampMs
         state.lastSide = sideValue
         return
@@ -313,7 +340,7 @@ export default function App() {
       }
 
       state.currentLabel = label
-      state.startTime = timestampMs
+      state.startTime = segmentStartMs ?? timestampMs
       state.lastTimestamp = timestampMs
       state.lastSide = sideValue
     },
@@ -344,6 +371,60 @@ export default function App() {
       window.localStorage.setItem(ACTIVITY_LOG_STORAGE_KEY, JSON.stringify(activityLog))
     }
   }, [activityLog])
+
+  useEffect(() => () => {
+    if (typeof window === 'undefined') {
+      return
+    }
+    for (const key of Object.keys(labelSaveTimeoutsRef.current)) {
+      const timeoutId = labelSaveTimeoutsRef.current[Number(key)]
+      if (typeof timeoutId === 'number') {
+        window.clearTimeout(timeoutId)
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const loadRemoteLabels = async () => {
+      try {
+        const response = await fetch(LABELS_ENDPOINT, { cache: 'no-store' })
+        if (!response.ok) {
+          throw new Error(`Failed to load labels (status ${response.status})`)
+        }
+        const payload = (await response.json()) as { labels?: Record<string, string> }
+        if (cancelled || !payload || typeof payload.labels !== 'object' || payload.labels === null) {
+          return
+        }
+        suppressLabelBroadcastRef.current = true
+        setLabels((prev) => {
+          const next = { ...prev }
+          let changed = false
+          for (const [key, value] of Object.entries(payload.labels)) {
+            const numericSide = Number(key)
+            if (!Number.isFinite(numericSide) || numericSide < 1 || numericSide > TOTAL_SIDES) {
+              continue
+            }
+            const sanitized = typeof value === 'string' ? value : ''
+            if (next[numericSide] !== sanitized) {
+              next[numericSide] = sanitized
+              changed = true
+            }
+          }
+          return changed ? next : prev
+        })
+      } catch (error) {
+        console.error('[timesheet-app] failed to load labels from server', error)
+      }
+    }
+
+    loadRemoteLabels()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -492,8 +573,9 @@ export default function App() {
     (side: number) => (event: ChangeEvent<HTMLInputElement>) => {
       const nextValue = event.target.value
       setLabels((prev) => ({ ...prev, [side]: nextValue }))
+      scheduleLabelSave(side, nextValue)
     },
-    [],
+    [scheduleLabelSave],
   )
 
   const getActiveContribution = (dateKey: string, label: string): number => {
@@ -509,6 +591,37 @@ export default function App() {
     const overlapEnd = Math.min(end, state.lastTimestamp)
     return overlapEnd > overlapStart ? overlapEnd - overlapStart : 0
   }
+
+  const submitLabelUpdate = useCallback(async (side: number, value: string) => {
+    try {
+      const response = await fetch(`${LABELS_ENDPOINT.replace(/\/$/, '')}/${side}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label: value })
+      })
+      if (!response.ok) {
+        throw new Error(`Failed to persist label (status ${response.status})`)
+      }
+    } catch (error) {
+      console.error(`[timesheet-app] failed to persist label for side ${side}`, error)
+    }
+  }, [])
+
+  const scheduleLabelSave = useCallback((side: number, value: string) => {
+    const nextValue = value.trim()
+    if (typeof window === 'undefined') {
+      submitLabelUpdate(side, nextValue)
+      return
+    }
+    const existing = labelSaveTimeoutsRef.current[side]
+    if (typeof existing === 'number') {
+      window.clearTimeout(existing)
+    }
+    labelSaveTimeoutsRef.current[side] = window.setTimeout(() => {
+      labelSaveTimeoutsRef.current[side] = null
+      submitLabelUpdate(side, nextValue)
+    }, 400)
+  }, [submitLabelUpdate])
 
   const getRowsForDate = useCallback(
     (dateKey: string): Array<{ label: string; totalMs: number }> => {

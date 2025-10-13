@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import cors from "cors";
 import express from "express";
 import mqtt from "mqtt";
-import { persistReading, getDatabasePath, getLatestReading, getReadingHistory } from "./database.js";
+import { persistReading, getDatabasePath, getLatestReadingWithSegment, getReadingHistory, getAllLabels, setLabel } from "./database.js";
 import { parsePayload } from "./parser.js";
 import { classifyVector, loadProfiles } from "./profiles.js";
 const __filename = fileURLToPath(import.meta.url);
@@ -29,6 +29,9 @@ const EMBED_DIST_PATH = (() => {
 const HISTORY_LIMIT_DEFAULT = Number.isFinite(Number(process.env.HISTORY_LIMIT))
     ? Number(process.env.HISTORY_LIMIT)
     : 5000;
+const TOTAL_SIDES = Number.isFinite(Number(process.env.TOTAL_SIDES))
+    ? Math.max(1, Number(process.env.TOTAL_SIDES))
+    : 12;
 const defaultLatest = {
     topic: null,
     side: null,
@@ -37,12 +40,23 @@ const defaultLatest = {
     imu_timestamp_text: null,
     imu_timestamp_iso: null,
     received_at: null,
-    raw_payload: null
+    raw_payload: null,
+    segment_started_at: null
 };
 let latestReading = { ...defaultLatest };
 let sideProfiles = [];
 let missingProfilesWarningShown = false;
+let currentSegmentStartIso = null;
 function updateLatest(topic, parsed, receivedAtIso, classificationTopic) {
+    if (classificationTopic.side === null) {
+        currentSegmentStartIso = null;
+    }
+    else if (latestReading.side !== classificationTopic.side) {
+        currentSegmentStartIso = receivedAtIso;
+    }
+    else if (!currentSegmentStartIso) {
+        currentSegmentStartIso = latestReading.segment_started_at ?? receivedAtIso;
+    }
     latestReading = {
         topic,
         side: classificationTopic.side,
@@ -51,7 +65,8 @@ function updateLatest(topic, parsed, receivedAtIso, classificationTopic) {
         imu_timestamp_text: parsed.timestampText,
         imu_timestamp_iso: parsed.timestampIso ?? null,
         received_at: receivedAtIso,
-        raw_payload: parsed.raw
+        raw_payload: parsed.raw,
+        segment_started_at: currentSegmentStartIso
     };
 }
 function getLatest() {
@@ -66,6 +81,7 @@ function ensureProfilesLoaded() {
 function startHttpServer() {
     const app = express();
     app.use(cors());
+    app.use(express.json());
     app.get("/api/imu/latest", (_request, response) => {
         response.json(getLatest());
     });
@@ -76,6 +92,27 @@ function startHttpServer() {
         const sinceIso = typeof sinceParam === "string" && sinceParam.trim().length > 0 ? sinceParam.trim() : undefined;
         const history = getReadingHistory({ limit, sinceIso });
         response.json(history);
+    });
+    app.get("/api/labels", (_request, response) => {
+        response.json({ labels: getAllLabels() });
+    });
+    app.put("/api/labels/:side", (request, response) => {
+        const sideRaw = request.params.side;
+        const side = Number.parseInt(sideRaw, 10);
+        if (!Number.isFinite(side) || side < 1 || side > TOTAL_SIDES) {
+            response.status(400).json({ error: "invalid_side", message: "Side must be between 1 and the configured TOTAL_SIDES" });
+            return;
+        }
+        const labelValue = typeof request.body?.label === "string" ? request.body.label : "";
+        try {
+            setLabel(side, labelValue);
+            const sanitized = labelValue.trim();
+            response.json({ side, label: sanitized.length > 0 ? sanitized : null });
+        }
+        catch (error) {
+            console.error(`[http] failed to persist label for side ${side}:`, error);
+            response.status(500).json({ error: "label_persist_failed" });
+        }
     });
     app.get("/healthz", (_request, response) => {
         response.json({ status: "ok" });
@@ -96,7 +133,7 @@ function startHttpServer() {
         console.log(`[http] serving electronics page from ${ELECTRONICS_HTML_PATH}`);
         app.use(express.static(ELECTRONICS_ROOT_DIR));
         app.get("*", (request, response, next) => {
-            if (request.path.startsWith("/api/") || request.path.startsWith("/timesheet-app")) {
+            if (request.path.startsWith("/api/") || request.path.startsWith("/timesheet-app") || request.path.startsWith("/assets/") || path.extname(request.path)) {
                 next();
                 return;
             }
@@ -107,7 +144,7 @@ function startHttpServer() {
         console.log(`[http] serving embedded UI from ${EMBED_DIST_PATH}`);
         app.use(express.static(EMBED_DIST_PATH));
         app.get("*", (request, response, next) => {
-            if (request.path.startsWith("/api/")) {
+            if (request.path.startsWith("/api/") || request.path.startsWith("/assets/") || path.extname(request.path)) {
                 next();
                 return;
             }
@@ -181,10 +218,12 @@ function startMqttClient() {
     });
 }
 async function bootstrap() {
-    const initialReading = getLatestReading();
+    const { latest: initialReading, segmentStart } = getLatestReadingWithSegment();
     if (initialReading) {
         console.log("[bootstrap] starting with latest reading from database");
         latestReading = initialReading;
+        currentSegmentStartIso = segmentStart ?? initialReading.segment_started_at ?? initialReading.received_at ?? null;
+        latestReading.segment_started_at = currentSegmentStartIso;
     }
     else {
         console.log("[bootstrap] no previous reading found in database");

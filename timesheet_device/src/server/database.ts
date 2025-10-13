@@ -42,6 +42,13 @@ db.exec(`
   )
 `);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS labels (
+    side INTEGER PRIMARY KEY,
+    label TEXT NOT NULL
+  )
+`);
+
 db.exec("CREATE INDEX IF NOT EXISTS idx_imu_readings_side ON imu_readings(side)");
 
 type PersistArgs = {
@@ -97,26 +104,107 @@ export function persistReading({
 }
 
 // --- Get latest reading ---
-const selectLatestStatement = db.prepare(
-  "SELECT * FROM imu_readings ORDER BY id DESC LIMIT 1"
-);
+const selectLatestRowStatement = db.prepare(`
+  SELECT
+    id,
+    topic,
+    imu_timestamp_text,
+    imu_timestamp_iso,
+    side,
+    confidence,
+    distance,
+    ax_x,
+    ax_y,
+    ax_z,
+    gy_x,
+    gy_y,
+    gy_z,
+    raw_payload,
+    received_at
+  FROM imu_readings
+  ORDER BY id DESC
+  LIMIT 1
+`);
+
+const selectPreviousDifferentStatement = db.prepare(`
+  SELECT id FROM imu_readings
+  WHERE id < ? AND (side IS NULL OR side != ?)
+  ORDER BY id DESC
+  LIMIT 1
+`);
+
+const selectFirstAfterBoundaryStatement = db.prepare(`
+  SELECT received_at FROM imu_readings
+  WHERE id > ? AND side = ?
+  ORDER BY id ASC
+  LIMIT 1
+`);
+
+const selectEarliestForSideStatement = db.prepare(`
+  SELECT received_at FROM imu_readings
+  WHERE side = ?
+  ORDER BY id ASC
+  LIMIT 1
+`);
+
+type LatestRow = {
+  id: number;
+  topic: string | null;
+  imu_timestamp_text: string | null;
+  imu_timestamp_iso: string | null;
+  side: number | null;
+  confidence: number | null;
+  distance: number | null;
+  ax_x: number | null;
+  ax_y: number | null;
+  ax_z: number | null;
+  gy_x: number | null;
+  gy_y: number | null;
+  gy_z: number | null;
+  raw_payload: string;
+  received_at: string;
+};
 
 export function getLatestReading(): LatestReadingPayload | null {
-  const row = selectLatestStatement.get() as any;
+  const result = getLatestReadingWithSegment();
+  return result.latest;
+}
+
+export function getLatestReadingWithSegment(): { latest: LatestReadingPayload | null; segmentStart: string | null; latestId: number | null } {
+  const row = selectLatestRowStatement.get() as LatestRow | undefined;
   if (!row) {
-    return null;
+    return { latest: null, segmentStart: null, latestId: null };
   }
 
-  return {
-    topic: row.topic,
-    side: row.side,
-    confidence: row.confidence === 1,
+  const latest: LatestReadingPayload = {
+    topic: row.topic ?? null,
+    side: typeof row.side === "number" ? row.side : null,
+    confidence: typeof row.confidence === "number" ? row.confidence === 1 : null,
     distance: row.distance,
     imu_timestamp_text: row.imu_timestamp_text,
     imu_timestamp_iso: row.imu_timestamp_iso,
     received_at: row.received_at,
     raw_payload: row.raw_payload,
+    segment_started_at: null,
   };
+
+  if (latest.side === null) {
+    return { latest, segmentStart: null, latestId: row.id };
+  }
+
+  const previousDifferent = selectPreviousDifferentStatement.get(row.id, latest.side) as { id: number } | undefined;
+  let segmentStart: string | null = null;
+  if (previousDifferent && typeof previousDifferent.id === "number") {
+    const startRow = selectFirstAfterBoundaryStatement.get(previousDifferent.id, latest.side) as { received_at: string } | undefined;
+    segmentStart = startRow?.received_at ?? row.received_at ?? null;
+  } else {
+    const earliest = selectEarliestForSideStatement.get(latest.side) as { received_at: string } | undefined;
+    segmentStart = earliest?.received_at ?? row.received_at ?? null;
+  }
+
+  latest.segment_started_at = segmentStart;
+
+  return { latest, segmentStart, latestId: row.id };
 }
 
 // --- Helper ---
@@ -174,14 +262,59 @@ export function getReadingHistory({ limit, sinceIso }: HistoryOptions = {}): Lat
     received_at: string;
   }>;
 
-  return rows.map((row) => ({
-    topic: row.topic ?? null,
-    side: typeof row.side === "number" ? row.side : null,
-    confidence: row.confidence === 1,
-    distance: row.distance,
-    imu_timestamp_text: row.imu_timestamp_text,
-    imu_timestamp_iso: row.imu_timestamp_iso,
-    received_at: row.received_at,
-    raw_payload: row.raw_payload
-  }));
+  let currentSide: number | null = null;
+  let segmentStart: string | null = null;
+
+  return rows.map((row) => {
+    const side = typeof row.side === "number" ? row.side : null;
+    if (side === null) {
+      currentSide = null;
+      segmentStart = null;
+    } else if (currentSide !== side) {
+      currentSide = side;
+      segmentStart = row.received_at ?? segmentStart;
+    }
+
+    return {
+      topic: row.topic ?? null,
+      side,
+      confidence: row.confidence === 1,
+      distance: row.distance,
+      imu_timestamp_text: row.imu_timestamp_text,
+      imu_timestamp_iso: row.imu_timestamp_iso,
+      received_at: row.received_at,
+      raw_payload: row.raw_payload,
+      segment_started_at: side !== null ? segmentStart : null
+    } satisfies LatestReadingPayload;
+  });
+}
+
+const selectLabelsStatement = db.prepare("SELECT side, label FROM labels");
+const upsertLabelStatement = db.prepare(`
+  INSERT INTO labels (side, label) VALUES (?, ?)
+  ON CONFLICT(side) DO UPDATE SET label = excluded.label
+`);
+const deleteLabelStatement = db.prepare("DELETE FROM labels WHERE side = ?");
+
+export function getAllLabels(): Record<number, string> {
+  const rows = selectLabelsStatement.all() as Array<{ side: number; label: string }>;
+  const result: Record<number, string> = {};
+  for (const row of rows) {
+    if (typeof row.side === "number" && row.side >= 1 && Number.isFinite(row.side) && typeof row.label === "string") {
+      result[row.side] = row.label;
+    }
+  }
+  return result;
+}
+
+export function setLabel(side: number, label: string): void {
+  const trimmed = label.trim();
+  if (!Number.isFinite(side) || side < 1) {
+    throw new Error(`Invalid side value ${side}`);
+  }
+  if (trimmed.length === 0) {
+    deleteLabelStatement.run(side);
+  } else {
+    upsertLabelStatement.run(side, trimmed);
+  }
 }

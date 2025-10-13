@@ -34,6 +34,12 @@ db.exec(`
     received_at TEXT NOT NULL
   )
 `);
+db.exec(`
+  CREATE TABLE IF NOT EXISTS labels (
+    side INTEGER PRIMARY KEY,
+    label TEXT NOT NULL
+  )
+`);
 db.exec("CREATE INDEX IF NOT EXISTS idx_imu_readings_side ON imu_readings(side)");
 // --- Prepared insert statement ---
 const insertStatement = db.prepare(`
@@ -59,22 +65,80 @@ export function persistReading({ topic, parsed, classification, receivedAtIso, }
     insertStatement.run(topic, parsed.timestampText, parsed.timestampIso ?? null, classification.side ?? null, classification.confident ? 1 : 0, classification.distance ?? null, parsed.ax[0], parsed.ax[1], parsed.ax[2], parsed.gy[0], parsed.gy[1], parsed.gy[2], parsed.raw, receivedAtIso);
 }
 // --- Get latest reading ---
-const selectLatestStatement = db.prepare("SELECT * FROM imu_readings ORDER BY id DESC LIMIT 1");
+const selectLatestRowStatement = db.prepare(`
+  SELECT
+    id,
+    topic,
+    imu_timestamp_text,
+    imu_timestamp_iso,
+    side,
+    confidence,
+    distance,
+    ax_x,
+    ax_y,
+    ax_z,
+    gy_x,
+    gy_y,
+    gy_z,
+    raw_payload,
+    received_at
+  FROM imu_readings
+  ORDER BY id DESC
+  LIMIT 1
+`);
+const selectPreviousDifferentStatement = db.prepare(`
+  SELECT id FROM imu_readings
+  WHERE id < ? AND (side IS NULL OR side != ?)
+  ORDER BY id DESC
+  LIMIT 1
+`);
+const selectFirstAfterBoundaryStatement = db.prepare(`
+  SELECT received_at FROM imu_readings
+  WHERE id > ? AND side = ?
+  ORDER BY id ASC
+  LIMIT 1
+`);
+const selectEarliestForSideStatement = db.prepare(`
+  SELECT received_at FROM imu_readings
+  WHERE side = ?
+  ORDER BY id ASC
+  LIMIT 1
+`);
 export function getLatestReading() {
-    const row = selectLatestStatement.get();
+    const result = getLatestReadingWithSegment();
+    return result.latest;
+}
+export function getLatestReadingWithSegment() {
+    const row = selectLatestRowStatement.get();
     if (!row) {
-        return null;
+        return { latest: null, segmentStart: null, latestId: null };
     }
-    return {
-        topic: row.topic,
-        side: row.side,
-        confidence: row.confidence === 1,
+    const latest = {
+        topic: row.topic ?? null,
+        side: typeof row.side === "number" ? row.side : null,
+        confidence: typeof row.confidence === "number" ? row.confidence === 1 : null,
         distance: row.distance,
         imu_timestamp_text: row.imu_timestamp_text,
         imu_timestamp_iso: row.imu_timestamp_iso,
         received_at: row.received_at,
         raw_payload: row.raw_payload,
+        segment_started_at: null,
     };
+    if (latest.side === null) {
+        return { latest, segmentStart: null, latestId: row.id };
+    }
+    const previousDifferent = selectPreviousDifferentStatement.get(row.id, latest.side);
+    let segmentStart = null;
+    if (previousDifferent && typeof previousDifferent.id === "number") {
+        const startRow = selectFirstAfterBoundaryStatement.get(previousDifferent.id, latest.side);
+        segmentStart = startRow?.received_at ?? row.received_at ?? null;
+    }
+    else {
+        const earliest = selectEarliestForSideStatement.get(latest.side);
+        segmentStart = earliest?.received_at ?? row.received_at ?? null;
+    }
+    latest.segment_started_at = segmentStart;
+    return { latest, segmentStart, latestId: row.id };
 }
 // --- Helper ---
 export function getDatabasePath() {
@@ -110,14 +174,56 @@ export function getReadingHistory({ limit, sinceIso } = {}) {
     }
     const statement = db.prepare(sql);
     const rows = statement.all(...params);
-    return rows.map((row) => ({
-        topic: row.topic ?? null,
-        side: typeof row.side === "number" ? row.side : null,
-        confidence: row.confidence === 1,
-        distance: row.distance,
-        imu_timestamp_text: row.imu_timestamp_text,
-        imu_timestamp_iso: row.imu_timestamp_iso,
-        received_at: row.received_at,
-        raw_payload: row.raw_payload
-    }));
+    let currentSide = null;
+    let segmentStart = null;
+    return rows.map((row) => {
+        const side = typeof row.side === "number" ? row.side : null;
+        if (side === null) {
+            currentSide = null;
+            segmentStart = null;
+        }
+        else if (currentSide !== side) {
+            currentSide = side;
+            segmentStart = row.received_at ?? segmentStart;
+        }
+        return {
+            topic: row.topic ?? null,
+            side,
+            confidence: row.confidence === 1,
+            distance: row.distance,
+            imu_timestamp_text: row.imu_timestamp_text,
+            imu_timestamp_iso: row.imu_timestamp_iso,
+            received_at: row.received_at,
+            raw_payload: row.raw_payload,
+            segment_started_at: side !== null ? segmentStart : null
+        };
+    });
+}
+const selectLabelsStatement = db.prepare("SELECT side, label FROM labels");
+const upsertLabelStatement = db.prepare(`
+  INSERT INTO labels (side, label) VALUES (?, ?)
+  ON CONFLICT(side) DO UPDATE SET label = excluded.label
+`);
+const deleteLabelStatement = db.prepare("DELETE FROM labels WHERE side = ?");
+export function getAllLabels() {
+    const rows = selectLabelsStatement.all();
+    const result = {};
+    for (const row of rows) {
+        if (typeof row.side === "number" && row.side >= 1 && Number.isFinite(row.side) && typeof row.label === "string") {
+            result[row.side] = row.label;
+        }
+    }
+    return result;
+}
+export function setLabel(side, label) {
+    const trimmed = label.trim();
+    if (!Number.isFinite(side) || side < 1) {
+        throw new Error(`Invalid side value ${side}`);
+    }
+    if (trimmed.length === 0) {
+        deleteLabelStatement.run(side);
+    }
+    else {
+        upsertLabelStatement.run(side, trimmed);
+    }
 }

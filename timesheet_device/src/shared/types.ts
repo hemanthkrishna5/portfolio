@@ -15,6 +15,7 @@ export interface LatestReadingPayload {
   imu_timestamp_iso: string | null;
   received_at: string | null;
   raw_payload: string | null;
+  segment_started_at?: string | null;
 }
 
 export interface ClassificationResult {
