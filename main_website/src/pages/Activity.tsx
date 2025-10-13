@@ -8,12 +8,6 @@ import { Line, Bar } from 'react-chartjs-2';
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, Title, Tooltip, Legend, Filler);
 
 const AUTH_STORAGE_KEY = 'activity-basic-auth';
-const DEFAULT_AUTH = {
-  username: 'hemanth',
-  password: 'anisha_334',
-  token: 'aGVtYW50aDphbmlzaGFfMzM0',
-};
-
 // Define the types for the data
 interface DayStats {
   date: string;
@@ -33,21 +27,21 @@ function ddmmyyyy(iso: string) {
 
 function loadStoredAuth() {
   if (typeof window === 'undefined') {
-    return { token: DEFAULT_AUTH.token, username: DEFAULT_AUTH.username };
+    return null;
   }
   try {
     const raw = window.sessionStorage.getItem(AUTH_STORAGE_KEY);
-    if (!raw) return { token: DEFAULT_AUTH.token, username: DEFAULT_AUTH.username };
+    if (!raw) return null;
     const parsed = JSON.parse(raw) as { token?: string; username?: string };
     if (!parsed || typeof parsed.token !== 'string' || parsed.token.length === 0) {
-      return { token: DEFAULT_AUTH.token, username: DEFAULT_AUTH.username };
+      return null;
     }
     return {
       token: parsed.token,
       username: typeof parsed.username === 'string' ? parsed.username : '',
     };
   } catch (_err) {
-    return { token: DEFAULT_AUTH.token, username: DEFAULT_AUTH.username };
+    return null;
   }
 }
 
@@ -68,7 +62,7 @@ export function Activity() {
   const [data, setData] = useState<DayStats[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [needsAuth, setNeedsAuth] = useState(false);
+  const [needsAuth, setNeedsAuth] = useState(() => !initialStoredAuth?.token);
   const [authFormError, setAuthFormError] = useState<string | null>(null);
   const [auth, setAuth] = useState<{ token: string; username: string } | null>(() => initialStoredAuth);
   const [authForm, setAuthForm] = useState(() => ({
@@ -97,8 +91,10 @@ export function Activity() {
   }, [auth]);
 
   useEffect(() => {
-    setNeedsAuth(false);
-  }, [activityApiUrl]);
+    if (authToken) {
+      setNeedsAuth(false);
+    }
+  }, [activityApiUrl, authToken]);
 
   const handleAuthSubmit = useCallback(
     (event) => {
