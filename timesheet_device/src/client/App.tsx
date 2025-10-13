@@ -26,9 +26,19 @@ const LABELS_ENDPOINT = (() => {
   }
 })()
 
+const ACTIVITY_LOG_ENDPOINT =
+  (import.meta as any).env?.VITE_DEVICE_ACTIVITY_LOG_URL ?? '/api/activity-log'
+const ACTIVITY_SYNC_INTERVAL_MS = 5 * 60 * 1000
+const ACTIVITY_SYNC_DEBOUNCE_MS = 30 * 1000
+
 type RangeMode = 'week' | 'month' | 'custom'
 
-type ActivityLogMap = Record<string, Record<string, number>>
+interface StoredActivityEntry {
+  totalMs: number;
+  side: number | null;
+}
+
+type ActivityLogMap = Record<string, Record<string, StoredActivityEntry>>
 
 interface LatestReadingResponse {
   side: number | null
@@ -55,8 +65,47 @@ interface EditingState {
 
 interface DateGroup {
   dateKey: string
-  rows: Array<{ label: string; totalMs: number }>
+  rows: Array<{ label: string; totalMs: number; side: number | null }>
   totalMs: number
+}
+
+const normalizeActivityLog = (raw: unknown): ActivityLogMap => {
+  const normalized: ActivityLogMap = {}
+  if (!raw || typeof raw !== 'object') {
+    return normalized
+  }
+  for (const [dateKey, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof dateKey !== 'string' || dateKey.length === 0 || !value || typeof value !== 'object') {
+      continue
+    }
+    const entries: Record<string, StoredActivityEntry> = {}
+    for (const [label, payload] of Object.entries(value as Record<string, unknown>)) {
+      if (typeof label !== 'string' || label.length === 0) {
+        continue
+      }
+      let totalMs = 0
+      let side: number | null = null
+      if (typeof payload === 'number') {
+        totalMs = Number.isFinite(payload) && payload > 0 ? Math.floor(payload) : 0
+      } else if (payload && typeof payload === 'object') {
+        const maybeTotal = (payload as { totalMs?: unknown }).totalMs
+        const maybeSide = (payload as { side?: unknown }).side
+        if (typeof maybeTotal === 'number' && Number.isFinite(maybeTotal) && maybeTotal > 0) {
+          totalMs = Math.floor(maybeTotal)
+        }
+        if (typeof maybeSide === 'number' && Number.isFinite(maybeSide)) {
+          side = Math.floor(maybeSide)
+        }
+      }
+      if (totalMs > 0 || side !== null) {
+        entries[label] = { totalMs, side }
+      }
+    }
+    if (Object.keys(entries).length > 0) {
+      normalized[dateKey] = entries
+    }
+  }
+  return normalized
 }
 
 const sideNumbers = Array.from({ length: TOTAL_SIDES }, (_, index) => index + 1)
@@ -239,7 +288,6 @@ const parseDurationInput = (raw: string): number => {
 const escapeCsvField = (value: string): string => {
   if (value.includes("\"") || value.includes(',') || value.includes('\n')) {
     return `"${value.replace(/"/g, '""')}"`
-    return `"${value.replace(/"/g, '""')}"`
   }
   return value
 }
@@ -253,7 +301,7 @@ export default function App() {
     }
     try {
       const stored = window.localStorage.getItem(ACTIVITY_LOG_STORAGE_KEY)
-      return stored ? (JSON.parse(stored) as ActivityLogMap) : {}
+      return stored ? normalizeActivityLog(JSON.parse(stored)) : {}
     } catch (storageError) {
       console.warn('Unable to read stored activity log', storageError)
       return {}
@@ -275,8 +323,11 @@ export default function App() {
   const labelSaveTimeoutsRef = useRef<Record<number, number | null>>({})
   const timelineRef = useRef<TimelineState>(createTimelineState())
   const [historyReady, setHistoryReady] = useState(false)
+  const [hasLoadedRemoteLog, setHasLoadedRemoteLog] = useState(false)
+  const [pendingSync, setPendingSync] = useState(false)
+  const applyingRemoteLogRef = useRef(false)
 
-  const addDurationToLog = useCallback((label: string, startMs: number, endMs: number) => {
+  const addDurationToLog = useCallback((label: string, side: number | null, startMs: number, endMs: number) => {
     if (endMs <= startMs) {
       return
     }
@@ -290,7 +341,10 @@ export default function App() {
         const duration = Math.max(0, chunkEnd - cursor)
         if (duration > 0) {
           const entry = { ...(next[dateKey] ?? {}) }
-          entry[label] = (entry[label] ?? 0) + duration
+          const existing = entry[label]
+          const totalMs = (existing?.totalMs ?? 0) + duration
+          const resolvedSide = side ?? existing?.side ?? null
+          entry[label] = { totalMs, side: resolvedSide }
           next[dateKey] = entry
         }
         cursor = chunkEnd
@@ -298,6 +352,17 @@ export default function App() {
       return next
     })
   }, [])
+
+  useEffect(() => {
+    if (!hasLoadedRemoteLog) {
+      return
+    }
+    if (applyingRemoteLogRef.current) {
+      applyingRemoteLogRef.current = false
+      return
+    }
+    setPendingSync(true)
+  }, [activityLog, hasLoadedRemoteLog])
 
   const resetActivityState = useCallback(() => {
     timelineRef.current = createTimelineState()
@@ -336,7 +401,7 @@ export default function App() {
       const start = state.startTime
       const end = timestampMs
       if (end > start) {
-        addDurationToLog(state.currentLabel, start, end)
+        addDurationToLog(state.currentLabel, state.lastSide, start, end)
       }
 
       state.currentLabel = label
@@ -371,6 +436,40 @@ export default function App() {
       window.localStorage.setItem(ACTIVITY_LOG_STORAGE_KEY, JSON.stringify(activityLog))
     }
   }, [activityLog])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const loadRemoteActivityLog = async () => {
+      try {
+        const response = await fetch(ACTIVITY_LOG_ENDPOINT, { cache: 'no-store' })
+        if (!response.ok) {
+          throw new Error(`Activity log request failed with status ${response.status}`)
+        }
+        const payload = (await response.json()) as { entries?: unknown }
+        if (cancelled) {
+          return
+        }
+        if (payload && typeof payload === 'object' && payload.entries) {
+          applyingRemoteLogRef.current = true
+          setActivityLog(normalizeActivityLog(payload.entries))
+        }
+        setHasLoadedRemoteLog(true)
+        setPendingSync(false)
+      } catch (error) {
+        if (!cancelled) {
+          console.warn('[activity-log] failed to load activity log from server', error)
+          setHasLoadedRemoteLog(true)
+        }
+      }
+    }
+
+    loadRemoteActivityLog()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   useEffect(() => () => {
     if (typeof window === 'undefined') {
@@ -624,18 +723,26 @@ export default function App() {
   }
 
   const getRowsForDate = useCallback(
-    (dateKey: string): Array<{ label: string; totalMs: number }> => {
+    (dateKey: string): Array<{ label: string; totalMs: number; side: number | null }> => {
       const storedEntries = activityLog[dateKey] ?? {}
-      const rows = Object.entries(storedEntries).map(([label, totalMs]) => ({ label, totalMs }))
+      const rows = Object.entries(storedEntries).map(([label, entry]) => ({
+        label,
+        totalMs: entry.totalMs,
+        side: entry.side ?? null,
+      }))
       const state = timelineRef.current
       if (state.currentLabel && state.startTime !== null && state.lastTimestamp !== null) {
         const activeMs = getActiveContribution(dateKey, state.currentLabel)
         if (activeMs > 0) {
           const existing = rows.find((row) => row.label === state.currentLabel)
+          const activeSide = state.lastSide
           if (existing) {
             existing.totalMs += activeMs
+            if (existing.side === null) {
+              existing.side = activeSide
+            }
           } else {
-            rows.push({ label: state.currentLabel, totalMs: activeMs })
+            rows.push({ label: state.currentLabel, totalMs: activeMs, side: activeSide ?? null })
           }
         }
       }
@@ -715,11 +822,18 @@ export default function App() {
     setActivityLog((prev) => {
       const next: ActivityLogMap = { ...prev }
       const entry = { ...(next[dateKey] ?? {}) }
-      if (originalLabel in entry) {
+      const originalEntry = entry[originalLabel]
+      if (originalEntry) {
         delete entry[originalLabel]
       }
       if (storedMs > 0) {
-        entry[normalizedLabel] = (entry[normalizedLabel] ?? 0) + storedMs
+        const destination = entry[normalizedLabel]
+        const combinedTotal = (destination?.totalMs ?? 0) + storedMs
+        const resolvedSide =
+          normalizedLabel === originalLabel
+            ? originalEntry?.side ?? destination?.side ?? null
+            : destination?.side ?? originalEntry?.side ?? null
+        entry[normalizedLabel] = { totalMs: combinedTotal, side: resolvedSide }
       }
       if (Object.keys(entry).length === 0) {
         delete next[dateKey]
@@ -815,14 +929,15 @@ export default function App() {
       }
       const dateLabel = formatDateDisplay(dateKey)
       for (const row of dateRows) {
-        rows.push(`${escapeCsvField(dateLabel)},${escapeCsvField(row.label)},${formatDuration(row.totalMs)}`)
+        const sideText = row.side !== null ? `Side ${row.side}` : ''
+        rows.push(`${escapeCsvField(dateLabel)},${escapeCsvField(row.label)},${escapeCsvField(sideText)},${formatDuration(row.totalMs)}`)
       }
     }
     if (rows.length === 0) {
       setDownloadError('No activity recorded in the selected range.')
       return
     }
-    const csv = ['Date,Activity,Duration', ...rows].join('\n')
+    const csv = ['Date,Activity,Side,Duration', ...rows].join('\n')
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
@@ -845,6 +960,78 @@ export default function App() {
   }, [activeSide, labels])
 
   const sourceTimestamp = latest?.imu_timestamp_text ?? latest?.imu_timestamp_iso ?? latest?.received_at ?? null
+
+  const syncActivityLog = useCallback(async () => {
+    if (!hasLoadedRemoteLog || !pendingSync) {
+      return
+    }
+    try {
+      const response = await fetch(ACTIVITY_LOG_ENDPOINT, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entries: activityLog }),
+      })
+      if (!response.ok) {
+        throw new Error(`Activity log sync failed with status ${response.status}`)
+      }
+      setPendingSync(false)
+    } catch (error) {
+      console.warn('[activity-log] failed to sync activity log', error)
+    }
+  }, [activityLog, hasLoadedRemoteLog, pendingSync])
+
+  useEffect(() => {
+    if (!hasLoadedRemoteLog || !pendingSync) {
+      return
+    }
+    if (typeof window === 'undefined') {
+      return
+    }
+    const timeoutId = window.setTimeout(() => {
+      void syncActivityLog()
+    }, ACTIVITY_SYNC_DEBOUNCE_MS)
+    return () => window.clearTimeout(timeoutId)
+  }, [hasLoadedRemoteLog, pendingSync, syncActivityLog])
+
+  useEffect(() => {
+    if (!hasLoadedRemoteLog) {
+      return
+    }
+    if (typeof window === 'undefined') {
+      return
+    }
+    const intervalId = window.setInterval(() => {
+      void syncActivityLog()
+    }, ACTIVITY_SYNC_INTERVAL_MS)
+    return () => window.clearInterval(intervalId)
+  }, [hasLoadedRemoteLog, syncActivityLog])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+    const handleImmediateFlush = () => {
+      if (!pendingSync) {
+        return
+      }
+      if (navigator.sendBeacon) {
+        try {
+          const payload = new Blob([JSON.stringify({ entries: activityLog })], { type: 'application/json' })
+          navigator.sendBeacon(ACTIVITY_LOG_ENDPOINT, payload)
+          return
+        } catch (error) {
+          console.warn('[activity-log] sendBeacon flush failed', error)
+        }
+      }
+      void syncActivityLog()
+    }
+    window.addEventListener('pagehide', handleImmediateFlush)
+    window.addEventListener('beforeunload', handleImmediateFlush)
+    return () => {
+      window.removeEventListener('pagehide', handleImmediateFlush)
+      window.removeEventListener('beforeunload', handleImmediateFlush)
+    }
+  }, [activityLog, pendingSync, syncActivityLog])
 
   const postHeight = useCallback(() => {
     if (typeof window === 'undefined') {
@@ -967,6 +1154,7 @@ export default function App() {
                     <thead>
                       <tr>
                         <th scope="col">Activity</th>
+                        <th scope="col" className="side-heading">Side</th>
                         <th scope="col">Total Duration</th>
                         <th scope="col" className="actions-heading">
                           Actions
@@ -991,6 +1179,9 @@ export default function App() {
                               ) : (
                                 <span>{row.label}</span>
                               )}
+                            </td>
+                            <td className="side-cell">
+                              <span>{row.side !== null ? `Side ${row.side}` : '—'}</span>
                             </td>
                             <td>
                               {isEditing ? (

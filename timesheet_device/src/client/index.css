@@ -245,6 +245,17 @@ body {
   background-color: rgba(56, 189, 248, 0.25);
 }
 
+.side-heading {
+  width: 110px;
+  white-space: nowrap;
+}
+
+.side-cell {
+  font-family: 'Space Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  font-size: 0.85rem;
+  color: #bfdbfe;
+}
+
 .actions-heading {
   text-align: right;
 }

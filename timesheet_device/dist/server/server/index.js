@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import cors from "cors";
 import express from "express";
 import mqtt from "mqtt";
-import { persistReading, getDatabasePath, getLatestReadingWithSegment, getReadingHistory, getAllLabels, setLabel } from "./database.js";
+import { persistReading, getDatabasePath, getLatestReadingWithSegment, getReadingHistory, getAllLabels, setLabel, getActivityLog, replaceActivityLog } from "./database.js";
 import { parsePayload } from "./parser.js";
 import { classifyVector, loadProfiles } from "./profiles.js";
 const __filename = fileURLToPath(import.meta.url);
@@ -144,6 +144,25 @@ function startHttpServer() {
         catch (error) {
             console.error(`[http] failed to persist label for side ${side}:`, error);
             response.status(500).json({ error: "label_persist_failed" });
+        }
+    });
+    app.get("/api/activity-log", (_request, response) => {
+        const entries = getActivityLog();
+        response.json({ entries });
+    });
+    app.put("/api/activity-log", (request, response) => {
+        const payload = request.body;
+        if (!payload || typeof payload !== "object" || !payload.entries || typeof payload.entries !== "object") {
+            response.status(400).json({ error: "invalid_payload", message: "Body must include an entries object" });
+            return;
+        }
+        try {
+            replaceActivityLog(payload.entries);
+            response.json({ status: "ok" });
+        }
+        catch (error) {
+            console.error("[http] failed to persist activity log", error);
+            response.status(500).json({ error: "activity_log_persist_failed" });
         }
     });
     app.get("/healthz", (_request, response) => {

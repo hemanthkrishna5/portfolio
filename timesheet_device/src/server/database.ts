@@ -49,6 +49,17 @@ db.exec(`
   )
 `);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS activity_log (
+    date_key TEXT NOT NULL,
+    label TEXT NOT NULL,
+    total_ms INTEGER NOT NULL,
+    side INTEGER,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (date_key, label)
+  )
+`);
+
 db.exec("CREATE INDEX IF NOT EXISTS idx_imu_readings_side ON imu_readings(side)");
 
 type PersistArgs = {
@@ -210,6 +221,79 @@ export function getLatestReadingWithSegment(): { latest: LatestReadingPayload | 
 // --- Helper ---
 export function getDatabasePath(): string {
   return DATABASE_PATH;
+}
+
+export type PersistedActivityLog = Record<string, Record<string, { totalMs: number; side: number | null }>>;
+
+type ActivityLogRow = {
+  date_key: string;
+  label: string;
+  total_ms: number;
+  side: number | null;
+};
+
+const selectActivityLogStatement = db.prepare(`
+  SELECT date_key, label, total_ms, side
+  FROM activity_log
+`);
+
+const clearActivityLogStatement = db.prepare(`DELETE FROM activity_log`);
+
+const upsertActivityLogStatement = db.prepare(`
+  INSERT INTO activity_log (date_key, label, total_ms, side, updated_at)
+  VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+  ON CONFLICT(date_key, label) DO UPDATE SET
+    total_ms = excluded.total_ms,
+    side = excluded.side,
+    updated_at = CURRENT_TIMESTAMP
+`);
+
+export function getActivityLog(): PersistedActivityLog {
+  const rows = selectActivityLogStatement.all() as ActivityLogRow[];
+  const result: PersistedActivityLog = {};
+  for (const row of rows) {
+    if (!row.date_key || !row.label) {
+      continue;
+    }
+    const dateKey = row.date_key;
+    const label = row.label;
+    const totalMs = Number.isFinite(row.total_ms) && row.total_ms > 0 ? Math.floor(row.total_ms) : 0;
+    const side = Number.isFinite(row.side) ? Math.floor(row.side as number) : null;
+    if (totalMs <= 0 && side === null) {
+      continue;
+    }
+    if (!result[dateKey]) {
+      result[dateKey] = {};
+    }
+    result[dateKey]![label] = { totalMs, side };
+  }
+  return result;
+}
+
+const replaceActivityLogTxn = db.transaction((entries: PersistedActivityLog) => {
+  clearActivityLogStatement.run();
+  for (const [dateKey, perLabel] of Object.entries(entries)) {
+    if (typeof dateKey !== "string" || dateKey.length === 0 || !perLabel || typeof perLabel !== "object") {
+      continue;
+    }
+    for (const [label, payload] of Object.entries(perLabel)) {
+      if (typeof label !== "string" || label.length === 0 || !payload || typeof payload !== "object") {
+        continue;
+      }
+      const totalMsRaw = (payload as { totalMs?: unknown }).totalMs;
+      const sideRaw = (payload as { side?: unknown }).side;
+      const totalMs = typeof totalMsRaw === "number" && Number.isFinite(totalMsRaw) && totalMsRaw >= 0 ? Math.floor(totalMsRaw) : 0;
+      const side = typeof sideRaw === "number" && Number.isFinite(sideRaw) ? Math.floor(sideRaw) : null;
+      if (totalMs <= 0 && side === null) {
+        continue;
+      }
+      upsertActivityLogStatement.run(dateKey, label, totalMs, side);
+    }
+  }
+});
+
+export function replaceActivityLog(entries: PersistedActivityLog): void {
+  replaceActivityLogTxn(entries);
 }
 
 interface HistoryOptions {

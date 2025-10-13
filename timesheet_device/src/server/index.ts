@@ -7,7 +7,18 @@ import express from "express";
 import mqtt from "mqtt";
 
 import type { LatestReadingPayload, ParsedMessage, SideProfile } from "../shared/types.js";
-import { persistReading, getDatabasePath, getLatestReading, getLatestReadingWithSegment, getReadingHistory, getAllLabels, setLabel } from "./database.js";
+import {
+  persistReading,
+  getDatabasePath,
+  getLatestReading,
+  getLatestReadingWithSegment,
+  getReadingHistory,
+  getAllLabels,
+  setLabel,
+  getActivityLog,
+  replaceActivityLog,
+  type PersistedActivityLog
+} from "./database.js";
 import { parsePayload } from "./parser.js";
 import { classifyVector, loadProfiles } from "./profiles.js";
 
@@ -172,6 +183,27 @@ function startHttpServer(): void {
     } catch (error) {
       console.error(`[http] failed to persist label for side ${side}:`, error);
       response.status(500).json({ error: "label_persist_failed" });
+    }
+  });
+
+  app.get("/api/activity-log", (_request, response) => {
+    const entries = getActivityLog();
+    response.json({ entries });
+  });
+
+  app.put("/api/activity-log", (request, response) => {
+    const payload = request.body as { entries?: unknown };
+    if (!payload || typeof payload !== "object" || !payload.entries || typeof payload.entries !== "object") {
+      response.status(400).json({ error: "invalid_payload", message: "Body must include an entries object" });
+      return;
+    }
+
+    try {
+      replaceActivityLog(payload.entries as PersistedActivityLog);
+      response.json({ status: "ok" });
+    } catch (error) {
+      console.error("[http] failed to persist activity log", error);
+      response.status(500).json({ error: "activity_log_persist_failed" });
     }
   });
 
