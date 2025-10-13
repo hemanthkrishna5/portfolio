@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Box, Typography, Grid, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, CircularProgress, Alert, TextField, Button, Stack } from '@mui/material';
 import { motion } from 'framer-motion';
 import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, BarElement, Title, Tooltip, Legend, Filler } from 'chart.js';
@@ -8,6 +8,12 @@ import { Line, Bar } from 'react-chartjs-2';
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, Title, Tooltip, Legend, Filler);
 
 const AUTH_STORAGE_KEY = 'activity-basic-auth';
+const CHART_RANGE_OPTIONS = [
+  { value: '7d', label: 'Last 7 Days' },
+  { value: 'month', label: 'Current Month' },
+  { value: 'year', label: 'Current Year' },
+  { value: 'all', label: 'All Time' },
+] as const;
 // Define the types for the data
 interface DayStats {
   date: string;
@@ -69,6 +75,7 @@ export function Activity() {
     username: initialStoredAuth?.username ?? '',
     password: '',
   }));
+  const [chartRange, setChartRange] = useState<(typeof CHART_RANGE_OPTIONS)[number]['value']>('7d');
   const authUsernameInput = authForm.username;
   const authPasswordInput = authForm.password;
 
@@ -192,14 +199,44 @@ export function Activity() {
     };
   }, [activityApiUrl, authToken]);
 
-  const last7DaysData = data.slice(-7);
-  const labels = last7DaysData.map(r => ddmmyyyy(r.date));
+  const filteredData = useMemo(() => {
+    if (data.length === 0) {
+      return [];
+    }
+    const sorted = data.slice().sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    const referenceDate = new Date(sorted[sorted.length - 1].date);
+
+    switch (chartRange) {
+      case 'all':
+        return sorted;
+      case '7d':
+        return sorted.slice(-7);
+      case 'month':
+        return sorted.filter((entry) => {
+          const current = new Date(entry.date);
+          return current.getFullYear() === referenceDate.getFullYear() && current.getMonth() === referenceDate.getMonth();
+        });
+      case 'year':
+        return sorted.filter((entry) => {
+          const current = new Date(entry.date);
+          return current.getFullYear() === referenceDate.getFullYear();
+        });
+      default:
+        return sorted;
+    }
+  }, [chartRange, data]);
+
+  const labels = filteredData.map((r) => ddmmyyyy(r.date));
+  const activeRangeLabel = useMemo(
+    () => CHART_RANGE_OPTIONS.find((option) => option.value === chartRange)?.label ?? '',
+    [chartRange],
+  );
 
   const stepsChartData = {
     labels,
     datasets: [{
       label: 'Steps',
-      data: last7DaysData.map(r => r.steps || 0),
+      data: filteredData.map(r => r.steps || 0),
       borderColor: '#5aa6ff',
       backgroundColor: (context: any) => {
         const ctx = context.chart.ctx;
@@ -218,7 +255,7 @@ export function Activity() {
   const kcalChartData = {
     labels,
     datasets: [
-      { label: 'Active kcal', data: last7DaysData.map(r => r.activeKcal || 0), backgroundColor: '#4ac7a5' },
+      { label: 'Active kcal', data: filteredData.map(r => r.activeKcal || 0), backgroundColor: '#4ac7a5' },
     ]
   };
 
@@ -337,10 +374,40 @@ export function Activity() {
         {authSection}
         {!needsAuth && (
           <>
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ mb: 3 }}>
+              {CHART_RANGE_OPTIONS.map((option) => (
+                <Button
+                  key={option.value}
+                  size="small"
+                  variant={chartRange === option.value ? 'contained' : 'outlined'}
+                  onClick={() => setChartRange(option.value)}
+                  sx={{
+                    textTransform: 'none',
+                    fontWeight: 600,
+                    borderColor: chartRange === option.value ? 'transparent' : 'rgba(255,255,255,0.25)',
+                    background:
+                      chartRange === option.value
+                        ? 'linear-gradient(120deg, #5aa6ff, #6dd5ff)'
+                        : 'rgba(15,20,32,0.7)',
+                    color: chartRange === option.value ? '#0b1020' : '#fff',
+                    '&:hover': {
+                      background:
+                        chartRange === option.value
+                          ? 'linear-gradient(120deg, #5aa6ff, #6dd5ff)'
+                          : 'rgba(15,20,32,0.85)',
+                    },
+                  }}
+                >
+                  {option.label}
+                </Button>
+              ))}
+            </Stack>
             <Grid container spacing={3}>
               <Grid item xs={12} lg={6}>
                 <Box sx={{ p: 0 }}>
-                  <Typography variant="h5" sx={{ color: '#fff', mb: 2 }}>Steps (Last 7 Days)</Typography>
+                  <Typography variant="h5" sx={{ color: '#fff', mb: 2 }}>
+                    Steps <Typography component="span" variant="subtitle2" sx={{ color: '#a6b1c2', ml: 1 }}>{activeRangeLabel}</Typography>
+                  </Typography>
                   <Box sx={{ height: { xs: 260, md: 360 } }}>
                     <Line options={chartOptions} data={stepsChartData} />
                   </Box>
@@ -348,7 +415,9 @@ export function Activity() {
               </Grid>
               <Grid item xs={12} lg={6}>
                 <Box sx={{ p: 0 }}>
-                  <Typography variant="h5" sx={{ color: '#fff', mb: 2 }}>Active Kcal (Last 7 Days)</Typography>
+                  <Typography variant="h5" sx={{ color: '#fff', mb: 2 }}>
+                    Active Kcal <Typography component="span" variant="subtitle2" sx={{ color: '#a6b1c2', ml: 1 }}>{activeRangeLabel}</Typography>
+                  </Typography>
                   <Box sx={{ height: { xs: 260, md: 360 } }}>
                     <Bar options={chartOptions} data={kcalChartData} />
                   </Box>
