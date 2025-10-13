@@ -5,10 +5,50 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Do-Decahedron Orientation (Combined)</title>
-    <script type="module" crossorigin src="/assets/index-nkXRMyZH.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-BSiIAZVb.css">
+    <style>
+      html, body, #root {
+        height: auto !important;
+        overflow: visible !important;
+      }
+      body {
+        background: transparent !important;
+        margin: 0 !important;
+      }
+    </style>
+    <script type="module" crossorigin src="/assets/index-DOaOovzU.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-CRGDbPCJ.css">
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      (function () {
+        function postHeight() {
+          var doc = document;
+          var height = doc.documentElement && doc.documentElement.scrollHeight
+            ? doc.documentElement.scrollHeight
+            : doc.body && doc.body.scrollHeight
+              ? doc.body.scrollHeight
+              : window.innerHeight;
+          if (window.parent) {
+            window.parent.postMessage({ type: 'EMBED_HEIGHT', height: Math.ceil(height) }, '*');
+          }
+        }
+
+        window.addEventListener('load', postHeight);
+        window.addEventListener('resize', postHeight);
+        if (typeof ResizeObserver !== 'undefined') {
+          try {
+            new ResizeObserver(function () { postHeight(); }).observe(document.documentElement);
+          } catch (error) {
+            console.warn('[embed] unable to attach ResizeObserver', error);
+          }
+        }
+
+        if (window.parent) {
+          window.parent.postMessage({ type: 'DODEC_LABELS_REQUEST' }, '*');
+          window.parent.postMessage({ type: 'LABEL_MESSAGE_REQUEST' }, '*');
+        }
+      })();
+    </script>
   </body>
 </html>

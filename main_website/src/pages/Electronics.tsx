@@ -138,6 +138,8 @@ export function Electronics() {
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const iframeOriginRef = useRef<string | null>(null);
   const [iframeHeight, setIframeHeight] = useState<number>(720);
+  const [iframeLoaded, setIframeLoaded] = useState(false);
+  const [iframeLoadError, setIframeLoadError] = useState<string | null>(null);
   const faceOrder = useMemo(() => parseFaceOrder(import.meta.env.VITE_DODECA_FACE_ORDER), []);
 
   useEffect(() => {
@@ -192,6 +194,22 @@ export function Electronics() {
     const origin = iframeOriginRef.current ?? '*';
     targetWindow.postMessage({ type: LABEL_MESSAGE_UPDATE, labels }, origin);
   }, [labels]);
+
+  const handleIframeLoad = useCallback(() => {
+    setIframeLoaded(true);
+    setIframeLoadError(null);
+    postLabelsToIframe();
+    if (typeof window !== 'undefined') {
+      window.setTimeout(() => {
+        postLabelsToIframe();
+      }, 150);
+    }
+  }, [postLabelsToIframe]);
+
+  const handleIframeError = useCallback(() => {
+    setIframeLoaded(false);
+    setIframeLoadError('Unable to load the embedded activity log. Please verify the device service is reachable and framing headers are configured.');
+  }, []);
 
   const labelSaveTimeoutRef = useRef<number | null>(null);
 
@@ -256,16 +274,34 @@ export function Electronics() {
   }, [labels]);
 
   useEffect(() => {
+    if (!iframeLoaded) {
+      return;
+    }
     postLabelsToIframe();
-  }, [postLabelsToIframe]);
+  }, [iframeLoaded, postLabelsToIframe]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    if (iframeLoaded || iframeLoadError) {
+      return;
+    }
+    const timeoutId = window.setTimeout(() => {
+      setIframeLoadError('The activity log is taking longer than expected to load. Ensure the device service is online.');
+    }, 8000);
+    return () => window.clearTimeout(timeoutId);
+  }, [iframeLoaded, iframeLoadError]);
 
   useEffect(() => {
     const onMessage = (ev: MessageEvent) => {
       if (ev?.data && ev.data.type === 'EMBED_HEIGHT' && typeof ev.data.height === 'number') {
+        setIframeLoaded(true);
+        setIframeLoadError(null);
         // Cap to a sensible min/max to avoid layout jumps
-        const h = Math.max(320, Math.min(ev.data.height, 4000));
+        const h = Math.max(320, Math.min(Math.ceil(ev.data.height), 4000));
         setIframeHeight(h);
-      } else if (ev?.data && ev.data.type === LABEL_MESSAGE_REQUEST) {
+      } else if (ev?.data && (ev.data.type === LABEL_MESSAGE_REQUEST || ev.data.type === 'DODEC_LABELS_REQUEST')) {
         const expectedOrigin = iframeOriginRef.current;
         if (expectedOrigin && expectedOrigin !== '*' && ev.origin !== expectedOrigin) {
           return;
@@ -429,10 +465,6 @@ export function Electronics() {
     [activeSide, scheduleLabelSave],
   );
 
-  const handleIframeLoad = useCallback(() => {
-    postLabelsToIframe();
-  }, [postLabelsToIframe]);
-
   const handleLabelBlur = useCallback(() => {
     if (activeSide === null) {
       return;
@@ -488,10 +520,10 @@ export function Electronics() {
               faceOrder={faceOrder}
             />
           </Grid>
-          <Grid item xs={12} lg={5}>
+          <Grid item xs={12} lg={5} sx={{ display: 'flex' }}>
             <Box
               sx={{
-                height: '100%',
+                flexGrow: 1,
                 borderRadius: 3,
                 p: { xs: 2.5, md: 3 },
                 background: 'linear-gradient(150deg, rgba(14,20,35,0.85), rgba(20,32,52,0.92))',
@@ -499,7 +531,7 @@ export function Electronics() {
                 backdropFilter: 'blur(18px)',
                 display: 'flex',
                 flexDirection: 'column',
-                gap: 2,
+                gap: 2.5,
               }}
             >
               <Typography variant="h5" sx={{ color: '#fff', fontWeight: 600 }}>
@@ -537,51 +569,76 @@ export function Electronics() {
                   },
                 }}
               />
-              <Box sx={{ flexGrow: 1 }} />
               <Typography variant="caption" sx={{ color: '#7f8ba5' }}>
                 Active for: {activeDurationText}
               </Typography>
+              <Box
+                sx={{
+                  flexGrow: 1,
+                  position: 'relative',
+                  mt: 3,
+                  overflow: 'hidden',
+                  background: 'transparent',
+                  border: 'none',
+                  boxShadow: 'none',
+                  minHeight: 360,
+                }}
+              >
+                {!iframeLoaded && (
+                  <Box
+                    sx={{
+                      position: 'absolute',
+                      inset: 0,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: '#c9dbff',
+                      fontWeight: 500,
+                      letterSpacing: 0.4,
+                      fontSize: { xs: '0.9rem', md: '1rem' },
+                      textAlign: 'center',
+                      px: 3,
+                      background: 'linear-gradient(160deg, rgba(8,12,22,0.72), rgba(12,19,33,0.78))',
+                      pointerEvents: 'none',
+                      zIndex: 1,
+                    }}
+                  >
+                    {iframeLoadError ?? 'Loading activity log…'}
+                  </Box>
+                )}
+                <iframe
+                  ref={iframeRef}
+                  src={iframeSrc}
+                  title="Timesheet device activity log"
+                  scrolling="no"
+                  loading="eager"
+                  style={{
+                    width: '100%',
+                    height: `${iframeHeight}px`,
+                    border: 'none',
+                    display: 'block',
+                    background: 'transparent',
+                    transition: 'height 0.35s ease',
+                  }}
+                  onLoad={handleIframeLoad}
+                  onError={handleIframeError}
+                />
+              </Box>
+              {iframeLoadError ? (
+                <Alert
+                  severity="warning"
+                  sx={{
+                    mt: 2,
+                    backgroundColor: 'rgba(255, 171, 0, 0.08)',
+                    borderRadius: 2,
+                  }}
+                >
+                  {iframeLoadError}
+                </Alert>
+              ) : null}
             </Box>
           </Grid>
         </Grid>
-
-        <Box
-          component={motion.div}
-          initial={{ opacity: 0, scale: 0.98 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ duration: 0.7, ease: 'easeOut' }}
-          sx={{
-            flexGrow: 1,
-            minHeight: { xs: '70vh', md: 'calc(100vh - 280px)' },
-          }}
-        >
-          <Box
-            sx={{
-              display: 'block',
-              width: '100%',
-              height: `${iframeHeight}px`,
-              borderRadius: 2,
-              overflow: 'hidden',
-              border: '1px solid rgba(255,255,255,0.08)',
-              backgroundColor: '#0b1020',
-            }}
-          >
-            <iframe
-              ref={iframeRef}
-              src={iframeSrc}
-              title="Timesheet device dashboard"
-              loading="lazy"
-              onLoad={handleIframeLoad}
-              style={{
-                display: 'block',
-                width: '100%',
-                height: '100%',
-                border: 'none',
-                background: 'transparent',
-              }}
-            />
-          </Box>
-        </Box>
       </Box>
     </motion.div>
   );

@@ -33,6 +33,7 @@ const EMBED_DIST_PATH = (() => {
   }
   return path.isAbsolute(override) ? override : path.resolve(__dirname, override);
 })();
+const EMBED_ASSETS_PATH = path.join(EMBED_DIST_PATH, "assets");
 const HISTORY_LIMIT_DEFAULT = Number.isFinite(Number(process.env.HISTORY_LIMIT))
   ? Number(process.env.HISTORY_LIMIT)
   : 5000;
@@ -96,8 +97,46 @@ function ensureProfilesLoaded(): void {
 
 function startHttpServer(): void {
   const app = express();
+  app.use(( _request, response, next) => {
+    response.removeHeader("X-Frame-Options");
+    response.setHeader(
+      "Content-Security-Policy",
+      "frame-ancestors 'self' https://tesseract.sbs https://www.tesseract.sbs"
+    );
+    next();
+  });
   app.use(cors());
   app.use(express.json());
+
+  const embedAvailable = fs.existsSync(EMBED_DIST_PATH);
+  const embedAssetsAvailable = fs.existsSync(EMBED_ASSETS_PATH);
+
+  if (embedAssetsAvailable) {
+    app.use("/assets", express.static(EMBED_ASSETS_PATH, { fallthrough: true }));
+  }
+
+  if (embedAvailable) {
+    app.get(["/vite.svg", "/robots.txt"], (request, response, next) => {
+      const resolved = path.join(EMBED_DIST_PATH, request.path.slice(1));
+      if (fs.existsSync(resolved)) {
+        response.sendFile(resolved);
+        return;
+      }
+      next();
+    });
+
+    app.get("/", (request, response, next) => {
+      if (Object.prototype.hasOwnProperty.call(request.query, "embed")) {
+        response.sendFile(path.join(EMBED_DIST_PATH, "index.html"), (error) => {
+          if (error) {
+            next(error);
+          }
+        });
+        return;
+      }
+      next();
+    });
+  }
 
   app.get("/api/imu/latest", (_request, response) => {
     response.json(getLatest());
@@ -157,17 +196,17 @@ function startHttpServer(): void {
     console.log(`[http] serving electronics page from ${ELECTRONICS_HTML_PATH}`);
     app.use(express.static(ELECTRONICS_ROOT_DIR));
     app.get("*", (request, response, next) => {
-      if (request.path.startsWith("/api/") || request.path.startsWith("/timesheet-app") || request.path.startsWith("/assets/") || path.extname(request.path)) {
+      if (request.path.startsWith("/api/") || request.path.startsWith("/timesheet-app")) {
         next();
         return;
       }
       response.sendFile(ELECTRONICS_HTML_PATH);
     });
-  } else if (fs.existsSync(EMBED_DIST_PATH)) {
+  } else if (embedAvailable) {
     console.log(`[http] serving embedded UI from ${EMBED_DIST_PATH}`);
     app.use(express.static(EMBED_DIST_PATH));
     app.get("*", (request, response, next) => {
-      if (request.path.startsWith("/api/") || request.path.startsWith("/assets/") || path.extname(request.path)) {
+      if (request.path.startsWith("/api/")) {
         next();
         return;
       }

@@ -569,29 +569,6 @@ export default function App() {
     setExpandedDates((prev) => (prev.includes(activeDateKey) ? prev : [...prev, activeDateKey]))
   }, [activeDateKey])
 
-  const handleLabelChange = useCallback(
-    (side: number) => (event: ChangeEvent<HTMLInputElement>) => {
-      const nextValue = event.target.value
-      setLabels((prev) => ({ ...prev, [side]: nextValue }))
-      scheduleLabelSave(side, nextValue)
-    },
-    [scheduleLabelSave],
-  )
-
-  const getActiveContribution = (dateKey: string, label: string): number => {
-    const state = timelineRef.current
-    if (!state.currentLabel || state.currentLabel !== label) {
-      return 0
-    }
-    if (state.startTime === null || state.lastTimestamp === null) {
-      return 0
-    }
-    const { start, end } = getDateBounds(dateKey)
-    const overlapStart = Math.max(start, state.startTime)
-    const overlapEnd = Math.min(end, state.lastTimestamp)
-    return overlapEnd > overlapStart ? overlapEnd - overlapStart : 0
-  }
-
   const submitLabelUpdate = useCallback(async (side: number, value: string) => {
     try {
       const response = await fetch(`${LABELS_ENDPOINT.replace(/\/$/, '')}/${side}`, {
@@ -622,6 +599,29 @@ export default function App() {
       submitLabelUpdate(side, nextValue)
     }, 400)
   }, [submitLabelUpdate])
+
+  const handleLabelChange = useCallback(
+    (side: number) => (event: ChangeEvent<HTMLInputElement>) => {
+      const nextValue = event.target.value
+      setLabels((prev) => ({ ...prev, [side]: nextValue }))
+      scheduleLabelSave(side, nextValue)
+    },
+    [scheduleLabelSave],
+  )
+
+  const getActiveContribution = (dateKey: string, label: string): number => {
+    const state = timelineRef.current
+    if (!state.currentLabel || state.currentLabel !== label) {
+      return 0
+    }
+    if (state.startTime === null || state.lastTimestamp === null) {
+      return 0
+    }
+    const { start, end } = getDateBounds(dateKey)
+    const overlapStart = Math.max(start, state.startTime)
+    const overlapEnd = Math.min(end, state.lastTimestamp)
+    return overlapEnd > overlapStart ? overlapEnd - overlapStart : 0
+  }
 
   const getRowsForDate = useCallback(
     (dateKey: string): Array<{ label: string; totalMs: number }> => {
@@ -845,6 +845,42 @@ export default function App() {
   }, [activeSide, labels])
 
   const sourceTimestamp = latest?.imu_timestamp_text ?? latest?.imu_timestamp_iso ?? latest?.received_at ?? null
+
+  const postHeight = useCallback(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+    if (window.parent === window) {
+      return
+    }
+    const doc = window.document
+    const rawHeight = doc.documentElement?.scrollHeight || doc.body?.scrollHeight || window.innerHeight
+    const height = Math.max(320, Math.min(Math.ceil(rawHeight), 4000))
+    window.parent?.postMessage({ type: 'EMBED_HEIGHT', height }, '*')
+  }, [])
+
+  useEffect(() => {
+    postHeight()
+  }, [postHeight, dateGroups.length, expandedDates, labels, editing, rangeMode])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+    const handler = () => postHeight()
+    window.addEventListener('load', handler)
+    window.addEventListener('resize', handler)
+    let resizeObserver: ResizeObserver | null = null
+    if (typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(handler)
+      resizeObserver.observe(window.document.documentElement)
+    }
+    return () => {
+      window.removeEventListener('load', handler)
+      window.removeEventListener('resize', handler)
+      resizeObserver?.disconnect()
+    }
+  }, [postHeight])
 
   return (
     <div className="app-shell">

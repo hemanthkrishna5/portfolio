@@ -6,6 +6,8 @@
   },
   "devDependencies": {
     "concurrently": "^9.2.1",
+    "playwright": "^1.56.0",
+    "source-map-cli": "^1.0.1",
     "wrangler": "^3.57.0"
   },
   "pnpm": {
