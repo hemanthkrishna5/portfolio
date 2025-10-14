@@ -1,11 +1,12 @@
 // @ts-nocheck
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
-import { Box, Typography, Grid, Alert, TextField } from '@mui/material';
+import { Box, Typography, Grid, Alert, TextField, Button } from '@mui/material';
 import { motion } from 'framer-motion';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { Text as DreiText } from '@react-three/drei';
 import * as THREE from 'three';
+import { useNavigate } from 'react-router-dom';
 
 const API_ENDPOINT = import.meta.env.VITE_DEVICE_IMU_URL ?? 'https://device.tesseract.sbs/api/imu/latest';
 const HISTORY_ENDPOINT =
@@ -122,6 +123,7 @@ const loadStoredLabels = (): Record<number, string> => {
 };
 
 export function Electronics() {
+  const navigate = useNavigate();
   const [latest, setLatest] = useState<LatestReadingResponse | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [liveError, setLiveError] = useState<string | null>(null);
@@ -501,9 +503,26 @@ export function Electronics() {
           gap: 4,
         }}
       >
-        <Typography variant="h2" component="h1" gutterBottom sx={{ fontWeight: 'bold', color: '#fff' }}>
-          Dodecahedron Timesheet
-        </Typography>
+        <Box
+          sx={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: 2,
+          }}
+        >
+          <Typography variant="h2" component="h1" sx={{ fontWeight: 'bold', color: '#fff' }}>
+            Dodecahedron Timesheet
+          </Typography>
+          <Button
+            variant="contained"
+            onClick={() => {
+              navigate('/secrets');
+            }}
+          >
+            Secrets
+          </Button>
+        </Box>
 
         {error && (
           <Alert severity="error" sx={{ maxWidth: 640 }}>
