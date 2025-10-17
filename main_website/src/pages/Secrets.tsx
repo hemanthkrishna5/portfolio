@@ -38,6 +38,13 @@ const INITIAL_EDIT_STATE = {
   newSecurityAnswer: '',
 };
 
+const sortEntries = (items) =>
+  [...items].sort((a, b) => {
+    const left = b.updatedAt ?? b.createdAt ?? '';
+    const right = a.updatedAt ?? a.createdAt ?? '';
+    return left.localeCompare(right);
+  });
+
 export function Secrets() {
   const [entries, setEntries] = useState([]);
   const [listError, setListError] = useState(null);
@@ -58,12 +65,7 @@ export function Secrets() {
       }
       const payload = await response.json();
       const summaries = Array.isArray(payload.entries) ? payload.entries : [];
-      summaries.sort((a, b) => {
-        const left = b.updatedAt ?? b.createdAt ?? '';
-        const right = a.updatedAt ?? a.createdAt ?? '';
-        return left.localeCompare(right);
-      });
-      setEntries(summaries);
+      setEntries(sortEntries(summaries));
       setListError(null);
     } catch (error) {
       console.error('[Secrets] failed to load entries', error);
@@ -104,7 +106,7 @@ export function Secrets() {
         }
         const created = payload?.entry;
         if (created) {
-          setEntries((prev) => [created, ...prev]);
+          setEntries((prev) => sortEntries([created, ...prev]));
         }
         setFormState(INITIAL_FORM);
         setFormMessage({ type: 'success', text: 'Wi-Fi entry saved.' });
@@ -120,34 +122,15 @@ export function Secrets() {
     [formState, formSubmitting],
   );
 
-  const openEditDialog = useCallback(async (entryId) => {
+  const openEditDialog = useCallback((entry) => {
     setEditState({
       ...INITIAL_EDIT_STATE,
       open: true,
-      entryId,
-      loading: true,
+      entryId: entry?.id ?? null,
+      question: entry?.securityQuestion ?? '',
+      loading: false,
       step: 'question',
     });
-    try {
-      const response = await fetch(`/api/secrets/${entryId}/question`, { cache: 'no-store' });
-      if (!response.ok) {
-        throw new Error(response.status === 404 ? 'Entry not found' : 'Failed to load question');
-      }
-      const payload = await response.json();
-      setEditState((prev) => ({
-        ...prev,
-        loading: false,
-        question: payload?.securityQuestion ?? '',
-        error: null,
-      }));
-    } catch (error) {
-      console.error('[Secrets] failed to fetch question', error);
-      setEditState((prev) => ({
-        ...prev,
-        loading: false,
-        error: error instanceof Error ? error.message : 'Unable to load security question',
-      }));
-    }
   }, []);
 
   const closeEditDialog = useCallback(() => {
@@ -168,12 +151,16 @@ export function Secrets() {
       error: null,
     }));
     try {
-      const response = await fetch(`/api/secrets/${editState.entryId}/verify`, {
+      const response = await fetch(`/api/secrets/${encodeURIComponent(editState.entryId)}/verify`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ answer: editState.answer }),
       });
       const payload = await response.json().catch(() => ({}));
+      if (response.status === 404) {
+        setEntries((prev) => prev.filter((item) => item.id !== editState.entryId));
+        throw new Error('Entry not found. It may have been deleted.');
+      }
       if (response.status === 403) {
         throw new Error('Incorrect answer');
       }
@@ -219,7 +206,7 @@ export function Secrets() {
       error: null,
     }));
     try {
-      const response = await fetch(`/api/secrets/${editState.entryId}`, {
+      const response = await fetch(`/api/secrets/${encodeURIComponent(editState.entryId)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -247,6 +234,7 @@ export function Secrets() {
                   id: updated.id,
                   personName: updated.personName,
                   wifiName: updated.wifiName,
+                  securityQuestion: updated.securityQuestion,
                   createdAt: updated.createdAt,
                   updatedAt: updated.updatedAt,
                 }
@@ -277,7 +265,7 @@ export function Secrets() {
         return;
       }
       try {
-        const response = await fetch(`/api/secrets/${id}`, { method: 'DELETE' });
+        const response = await fetch(`/api/secrets/${encodeURIComponent(id)}`, { method: 'DELETE' });
         if (response.status === 404) {
           throw new Error('Entry already removed');
         }
@@ -447,7 +435,7 @@ export function Secrets() {
                     </Typography>
                   </Box>
                   <Stack direction="row" spacing={1.5}>
-                    <Button variant="outlined" onClick={() => openEditDialog(entry.id)}>
+                    <Button variant="outlined" onClick={() => openEditDialog(entry)}>
                       Edit
                     </Button>
                     <Button variant="outlined" color="error" onClick={() => handleDelete(entry.id)}>
@@ -530,18 +518,6 @@ export function Secrets() {
                 value={editState.detail.securityQuestion ?? ''}
                 onChange={handleEditFieldChange('securityQuestion')}
                 required
-                fullWidth
-              />
-              <TextField
-                label="Set a new answer (optional)"
-                value={editState.newSecurityAnswer}
-                onChange={(event) =>
-                  setEditState((prev) => ({
-                    ...prev,
-                    newSecurityAnswer: event.target.value,
-                  }))
-                }
-                helperText="Leave blank to keep the existing answer"
                 fullWidth
               />
               {editState.error && <Alert severity="error">{editState.error}</Alert>}

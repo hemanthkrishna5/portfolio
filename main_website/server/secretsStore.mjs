@@ -83,6 +83,7 @@ function mapToSummary(entry) {
     id: entry.id,
     personName: entry.personName,
     wifiName: entry.wifiName,
+    securityQuestion: entry.securityQuestion,
     createdAt: entry.createdAt,
     updatedAt: entry.updatedAt,
   };
